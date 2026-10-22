@@ -1,0 +1,15 @@
+model:
+  name: "test"
+  seed: 42
+  patch_size: 16
+  out_indices: [2, 5, 8, 11]
+train_config:
+  batch_size: 16
+  epochs: 100
+  num_workers: 4
+  learning_rate: 0.001
+  optimizer: Adam
+  loss: MSE
+  multi_scale: true
+  scale_sizes: [224, 512, 768]
+  fix_scale_size: 512
