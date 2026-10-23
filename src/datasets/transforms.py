@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from albumentations.pytorch import ToTensorV2
 from PIL import Image, ImageDraw
+from loguru import logger
 
 
 class AlbTransform:
@@ -105,6 +106,10 @@ if __name__ == "__main__":
     from pathlib import Path
 
     from datasets import load_from_disk
+    from src.utils.logger import setup_logging
+    from src.config import load_config
+
+    setup_logging(load_config().logger)
 
     # 使用同一条真实 RAOD 样本，对比训练和验证模式；可修改索引查看其他图片。
     root = Path(__file__).resolve().parents[2]
@@ -160,9 +165,13 @@ if __name__ == "__main__":
         )
         preview = Image.fromarray(restored.cpu().numpy())
         draw_boxes(preview, transformed_boxes).save(output_dir / f"{mode}.png")
-        print(
-            f"{mode}: 图片 {tuple(pixels.shape)} / {pixels.dtype}，"
-            f"边界框 {tuple(transformed_boxes.shape)} / {transformed_boxes.dtype}"
+        logger.info(
+            "{}：图片 {} / {}，边界框 {} / {}",
+            mode,
+            tuple(pixels.shape),
+            pixels.dtype,
+            tuple(transformed_boxes.shape),
+            transformed_boxes.dtype,
         )
 
     # 训练模式强制水平翻转，翻转后的框应与验证模式的框形成左右镜像。
@@ -170,4 +179,4 @@ if __name__ == "__main__":
     width = results["val"]["image"].shape[-1]
     expected[:, [0, 2]] = width - expected[:, [2, 0]]
     torch.testing.assert_close(results["train"]["boxes"], expected, rtol=0, atol=1e-3)
-    print(f"检查通过，原图、训练和验证的带框预览已保存到：{output_dir}")
+    logger.success("检查通过，原图、训练和验证的带框预览已保存到：{}", output_dir)

@@ -4,6 +4,7 @@ from datasets import load_from_disk, Dataset, DatasetDict
 from torch.utils.data import DataLoader
 from src.config import TrainConfig
 from src.datasets.collate import RAODCollate
+from loguru import logger
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_ROOT = ROOT / "data" / "RAOD-benchmark"
@@ -19,6 +20,7 @@ RAOD_SMALL = RAOD / "small"
 
 
 def load_raod_small(train: bool = True) -> Dataset:
+    logger.info("加载raod_small数据集")
     ds = load_from_disk(RAOD_SMALL)
     small_dict: DatasetDict = ds.train_test_split(test_size=0.2, shuffle=True, seed=42)
     return small_dict["train" if train else "test"]

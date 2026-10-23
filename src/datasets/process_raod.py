@@ -23,6 +23,7 @@ from pathlib import Path
 from collections.abc import Iterator
 import xml.etree.ElementTree as ET
 from datasets import DatasetDict, Dataset, Features, Value, Image, Sequence
+from loguru import logger
 
 CATEGORY = "spill"
 CLASS_NAMES = [CATEGORY]
@@ -91,9 +92,10 @@ def gen(
     # 获取文件下所有图片的路径
     image_paths = images_dir.glob("*.jpg")
     for img_path in image_paths:
-        print(img_path)
+        logger.debug("解析图片：{}", img_path)
         xml_path = xmls_dir / f"{img_path.stem}.xml"
         if not xml_path.exists():
+            logger.warning("标注不存在，跳过图片：{}", img_path)
             continue
         boxes, labels, w, h = parse_xml(xml_path)
         yield {
@@ -107,6 +109,7 @@ def gen(
 
 
 def process():
+    logger.info("开始生成 RAOD 缓存，输出目录：{}", RAOD)
     # ① cache_dir：指定 from_generator 的【生成过程临时缓存】位置。
     #    from_generator 是即时执行的，调用时会把整批数据物化成 Arrow 并临时写进该目录
     #    （缓存文件名由参数 hash 得到，如 cache/generator-xxxx/xxx.arrow）。
@@ -127,6 +130,7 @@ def process():
     #    ② 是路径清晰、稳定的成品数据集。
     #    两者内容相同，但都写在 cache/ 下 => 同一份数据被存了两份，占用双倍空间。
     ds.save_to_disk(RAOD_SMALL)
+    logger.success("小样本缓存已保存：{} 条，路径：{}", len(ds), RAOD_SMALL)
 
     train_ds = Dataset.from_generator(
         partial(gen, TRAIN, TRAIN_LABELS),
@@ -142,10 +146,16 @@ def process():
 
     dict = DatasetDict({"train": train_ds, "test": test_ds})
     dict.save_to_disk(RAOD, max_shard_size=500)  # 数据集分片的最大大小: 500MB
+    logger.success("RAOD 缓存已保存：训练 {} 条，测试 {} 条", len(train_ds), len(test_ds))
 
 
 if __name__ == "__main__":
-    process()
+    from src.utils.logger import setup_logging
+    from src.config import load_config
+
+    setup_logging(load_config().logger)
+    with logger.catch(reraise=True):
+        process()
     # print(SMALL_TRAIN)
     # data_gen = gen(SMALL_TRAIN, SMALL_LABELS)
     # print(next(data_gen))
