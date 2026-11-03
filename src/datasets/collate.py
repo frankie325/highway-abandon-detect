@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-
 import torch
 
 from .transforms import AlbTransform
@@ -54,6 +53,7 @@ class RAODCollate:
         images = [result["image"] for result in results]
         max_height = max(image.shape[-2] for image in images)
         max_width = max(image.shape[-1] for image in images)
+
         # 向上取整到配置中 patch_size 的整数倍，满足骨干网络的尺寸对齐要求。
         # 公式等价于 ceil(尺寸 / patch_size) * patch_size；已整除时不变。
         # 例如 patch_size=16 时，721 补到 736，720 保持不变。
@@ -64,39 +64,59 @@ class RAODCollate:
         padded_width = (
             (max_width + self.patch_size - 1) // self.patch_size * self.patch_size
         )
+
         # 创建 [B, 3, H_pad, W_pad] 的零填充画布，沿用图片的 dtype 和 device。
         # 此处的 0 是归一化后的数值，不一定对应原始图片中的黑色。
-        pixel_values = images[0].new_zeros(
-            (len(images), 3, padded_height, padded_width)
+        batch_szie = len(images)
+        device = images[0].device
+
+        # 如果这批图像的尺寸和padding过后的尺寸一样，说明这批图像没有任何一张需要被 padding
+        no_padding = all(
+            img.shape[-2:] == (padded_height, padded_width) for img in images
         )
-        # 每张图片对应一张 [H_pad, W_pad] 的 bool 掩码，无需通道维度。
-        # 先将所有位置标为 True（padding），再把图片实际覆盖的位置标为 False。
-        padding_mask = torch.ones(
-            (len(images), padded_height, padded_width),
-            dtype=torch.bool,
-            device=images[0].device,
-        )
-        for i, image in enumerate(images):
-            height, width = image.shape[-2:]
-            # 图片放在画布左上角，仅右侧和底部补边，图片内容不会再次缩放或拉伸。
-            # 左上角坐标不变，所以补边无需平移边界框。
-            pixel_values[i, :, :height, :width] = image
-            # 按图片尺寸标记有效区域，与像素值无关：原图中的黑色像素同样有效。
-            padding_mask[i, :height, :width] = False
+
+        if no_padding:
+            padding_mask = torch.zeros(
+                (batch_szie, padded_height, padded_width),
+                dtype=torch.bool,
+                device=device,
+            )
+            pixel_values = torch.stack(images, dim=0)
+        else:
+            pixel_values = images[0].new_zeros(
+                (batch_szie, 3, padded_height, padded_width)
+            )
+            # 每张图片对应一张 [H_pad, W_pad] 的 bool 掩码，无需通道维度。
+            # 先将所有位置标为 True（padding），再把图片实际覆盖的位置标为 False。
+            padding_mask = torch.ones(
+                (len(images), padded_height, padded_width),
+                dtype=torch.bool,
+                device=device,
+            )
+            for i, image in enumerate(images):
+                height, width = image.shape[-2:]
+                # 图片放在画布左上角，仅右侧和底部补边，图片内容不会再次缩放或拉伸。
+                # 左上角坐标不变，所以补边无需平移边界框。
+                pixel_values[i, :, :height, :width] = image
+                # 按图片尺寸标记有效区域，与像素值无关：原图中的黑色像素同样有效。
+                padding_mask[i, :height, :width] = False
 
         # 检测框和类别数量可能不同，按图片保留变长列表，不强行堆叠。
         return {
-            "images": pixel_values,
+            "images": pixel_values,  # (B, C, H, W)
             "image_ids": [sample["image_id"] for sample in batch],
+            "no_padding": no_padding,
             "origins": torch.tensor(
                 [[sample["width"], sample["height"]] for sample in batch],
                 dtype=torch.int64,
             ),
-            "boxes": [result["boxes"] for result in results],
+            "boxes": [
+                result["boxes"] for result in results
+            ],  # (B, N, 4) 一个样本有N个box
             "labels": [
                 torch.tensor(sample["labels"], dtype=torch.int64) for sample in batch
-            ],
-            "padding_masks": padding_mask,
+            ],  # (B, N)
+            "padding_masks": padding_mask,  # (B, H, W)
         }
 
     def get_scale_size(self) -> int:

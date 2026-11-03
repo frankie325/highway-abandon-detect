@@ -102,6 +102,136 @@ def draw_boxes(preview: Image.Image, preview_boxes: torch.Tensor) -> Image.Image
     return preview
 
 
+def tensor_to_image(
+    image: torch.Tensor,
+    boxes: torch.Tensor,
+    *,
+    padding_mask: torch.Tensor | None = None,
+    highlight_padding: bool = True,
+    mean: tuple[float, float, float] = (0.485, 0.456, 0.406),
+    std: tuple[float, float, float] = (0.229, 0.224, 0.225),
+) -> Image.Image:
+    """将归一化的 [3, H, W] 张量还原为 RGB 图片，并绘制像素 xyxy 框。
+
+    boxes 为 [N, 4]，无目标时传入形状为 [0, 4] 的张量。
+    padding_mask 为 bool [H, W]，True 表示补边；传入时默认用半透明紫色标记。
+    highlight_padding=False 可查看补边的真实显示颜色。始终保留完整画布，不裁掉补边。
+    mean/std 必须与图像转换时一致；反归一化不会撤销缩放、翻转或颜色增强。
+    支持设备上的张量，内部 detach 并移到 CPU，不修改输入数据。
+    """
+    if image.ndim != 3 or image.shape[0] != 3 or not image.is_floating_point():
+        raise ValueError("image 必须为归一化后的浮点张量，形状为 [3, H, W]")
+    if boxes.ndim != 2 or boxes.shape[1] != 4:
+        raise ValueError("boxes 必须为 [N, 4] 格式的像素 xyxy 张量")
+    pixels = image.detach().to(device="cpu", dtype=torch.float32)
+    preview_boxes = boxes.detach().to(device="cpu", dtype=torch.float32)
+    if not torch.isfinite(pixels).all() or not torch.isfinite(preview_boxes).all():
+        raise ValueError("图片和边界框不能包含 NaN 或无穷值")
+
+    # Albumentations 的归一化为 (pixel / 255 - mean) / std，这里执行逆操作。
+    restored = pixels * pixels.new_tensor(std)[:, None, None]
+    restored = restored + pixels.new_tensor(mean)[:, None, None]
+    restored = restored.clamp(0, 1).permute(1, 2, 0).mul(255).round().to(torch.uint8)
+    preview = Image.fromarray(restored.numpy())
+
+    if padding_mask is not None:
+        if (
+            padding_mask.dtype != torch.bool
+            or tuple(padding_mask.shape) != tuple(pixels.shape[-2:])
+        ):
+            raise ValueError("padding_mask 必须为与图片宽高一致的 bool [H, W] 张量")
+        if highlight_padding:
+            # 紫色仅用于可视化，不代表模型收到的实际像素；有效区域保持不变。
+            alpha = padding_mask.detach().cpu().to(torch.uint8).mul(96).numpy()
+            overlay = Image.new("RGBA", preview.size, (255, 0, 255, 0))
+            overlay.putalpha(Image.fromarray(alpha))
+            preview = Image.alpha_composite(preview.convert("RGBA"), overlay).convert(
+                "RGB"
+            )
+
+    # 补边位于右下，不改变框的原点；按转换后的坐标直接绘制即可。
+    return draw_boxes(preview, preview_boxes)
+
+
+def batch_tensor_to_images(
+    images: torch.Tensor,
+    boxes: list[torch.Tensor] | torch.Tensor,
+    *,
+    padding_masks: torch.Tensor | None = None,
+    highlight_padding: bool = True,
+    concat: bool = False,
+    columns: int = 2,
+    gap: int = 8,
+    mean: tuple[float, float, float] = (0.485, 0.456, 0.406),
+    std: tuple[float, float, float] = (0.229, 0.224, 0.225),
+) -> list[Image.Image] | Image.Image:
+    """还原 [B, 3, H, W] 批次，默认返回 B 张带框 PIL 图片。
+
+    boxes 接收 RAODBatch 的变长列表（每张 [N_i, 4]），或固定框数的 [B, N, 4] 张量。
+    padding_masks 为 bool [B, H, W]；补边不会被裁掉，标记方式与单图方法一致。
+    concat=True 时返回一张按 columns 列拼接的图片，包含样本索引和补边占比。
+    拼图间隔为 gap 像素；拼图不再次缩放图片，边界框位置保持一致。
+    """
+    if images.ndim != 4 or images.shape[1] != 3 or images.shape[0] == 0:
+        raise ValueError("images 必须为非空的 [B, 3, H, W] 批次张量")
+    batch_size, _, height, width = images.shape
+    if isinstance(boxes, torch.Tensor) and (boxes.ndim != 3 or boxes.shape[-1] != 4):
+        raise ValueError("批量 boxes 张量必须为 [B, N, 4]，变长框请使用张量列表")
+    if len(boxes) != batch_size:
+        raise ValueError("boxes 的图片数量必须与 images 一致")
+    if padding_masks is not None:
+        if (
+            padding_masks.dtype != torch.bool
+            or tuple(padding_masks.shape) != (batch_size, height, width)
+        ):
+            raise ValueError("padding_masks 必须为与批次尺寸一致的 bool [B, H, W] 张量")
+
+    previews = [
+        tensor_to_image(
+            image,
+            boxes[index],
+            padding_mask=padding_masks[index] if padding_masks is not None else None,
+            highlight_padding=highlight_padding,
+            mean=mean,
+            std=std,
+        )
+        for index, image in enumerate(images)
+    ]
+    if not concat:
+        return previews
+    if columns < 1 or gap < 0:
+        raise ValueError("columns 必须为正整数，gap 不能为负数")
+
+    columns = min(columns, batch_size)
+    rows = (batch_size + columns - 1) // columns
+    header_height, label_height = 24, 22
+    grid = Image.new(
+        "RGB",
+        (
+            columns * width + (columns + 1) * gap,
+            header_height + rows * (height + label_height) + (rows + 1) * gap,
+        ),
+        (30, 30, 30),
+    )
+    draw = ImageDraw.Draw(grid)
+    marked = highlight_padding and padding_masks is not None
+    legend = (
+        "red: boxes | magenta: padding overlay"
+        if marked else "red: boxes | padding: original fill color"
+    )
+    draw.text((gap, 4), legend, fill="white")
+    for index, preview in enumerate(previews):
+        x = gap + (index % columns) * (width + gap)
+        y = header_height + gap + (index // columns) * (height + label_height + gap)
+        label = f"sample {index}"
+        if padding_masks is not None:
+            percentage = padding_masks[index].detach().float().mean().item() * 100
+            label += f" | padding {percentage:.1f}%"
+        draw.text((x, y + 3), label, fill="white")
+        grid.paste(preview, (x, y + label_height))
+    return grid
+
+
 if __name__ == "__main__":
     from pathlib import Path
 
@@ -109,7 +239,8 @@ if __name__ == "__main__":
     from src.utils.logger import setup_logging
     from src.config import load_config
 
-    setup_logging(load_config().logger)
+    config = load_config()
+    setup_logging(config.logger)
 
     # 使用同一条真实 RAOD 样本，对比训练和验证模式；可修改索引查看其他图片。
     root = Path(__file__).resolve().parents[2]
@@ -157,14 +288,9 @@ if __name__ == "__main__":
             for key in result:
                 torch.testing.assert_close(result[key], repeated[key], rtol=0, atol=0)
 
-        # 归一化张量不能直接显示：先执行 pixel * std + mean，还原到 [0, 1]。
-        restored = pixels * pixels.new_tensor(std)[:, None, None]
-        restored = restored + pixels.new_tensor(mean)[:, None, None]
-        restored = (
-            restored.clamp(0, 1).permute(1, 2, 0).mul(255).round().to(torch.uint8)
+        tensor_to_image(pixels, transformed_boxes, mean=mean, std=std).save(
+            output_dir / f"{mode}.png"
         )
-        preview = Image.fromarray(restored.cpu().numpy())
-        draw_boxes(preview, transformed_boxes).save(output_dir / f"{mode}.png")
         logger.info(
             "{}：图片 {} / {}，边界框 {} / {}",
             mode,
@@ -179,4 +305,49 @@ if __name__ == "__main__":
     width = results["val"]["image"].shape[-1]
     expected[:, [0, 2]] = width - expected[:, [2, 0]]
     torch.testing.assert_close(results["train"]["boxes"], expected, rtol=0, atol=1e-3)
+
+    from src.datasets.collate import RAODCollate
+
+    # 选择宽高比差异最大的两张图片，再补足四张，确保能直观看到批次补边。
+    ratios = [
+        row["width"] / row["height"]
+        for row in dataset.select_columns(["width", "height"])
+    ]
+    indices = list(
+        dict.fromkeys((ratios.index(max(ratios)), ratios.index(min(ratios))))
+    )
+    for index in range(len(dataset)):
+        if len(indices) >= 4:
+            break
+        if index not in indices:
+            indices.append(index)
+    samples = [dataset[index] for index in indices]
+    for mode, is_train in (("train", True), ("val", False)):
+        collate = RAODCollate(
+            train=is_train,
+            multi_scale=False,
+            fix_scale_size=scale_size,
+            patch_size=config.model.patch_size,
+            seed=config.seed,
+        )
+        batch = collate(samples)
+        # 原样拼图保留反归一化后的真实补边颜色，标记版叠加紫色显示补边范围。
+        for highlight in (False, True):
+            grid = batch_tensor_to_images(
+                batch["images"],
+                batch["boxes"],
+                padding_masks=batch["padding_masks"],
+                highlight_padding=highlight,
+                concat=True,
+                columns=2,
+                mean=mean,
+                std=std,
+            )
+            assert isinstance(grid, Image.Image)
+            suffix = "_padding" if highlight else ""
+            grid.save(output_dir / f"batch_{mode}{suffix}.png")
+        logger.info(
+            "{} 批次预览：images={}，原始样本索引={}",
+            mode, tuple(batch["images"].shape), indices,
+        )
     logger.success("检查通过，原图、训练和验证的带框预览已保存到：{}", output_dir)

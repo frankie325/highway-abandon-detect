@@ -12,10 +12,14 @@ class _ConfigModel(BaseModel):
 class ModelConfig(_ConfigModel):
     """模型配置。"""
 
-    seed: int = Field(lt=2**32)
-    name: str = Field(min_length=1)
+    pretrain_model: str = Field(min_length=1)
     patch_size: int = Field(gt=0)
     out_indices: list[int] = Field(min_length=1)
+    projector_scale: list[Literal["P3", "P4", "P5", "P6"]]
+    project_hidden_dim: int = Field(gt=0)
+    num_classes: int = Field(gt=0)
+    num_queries: int = Field(gt=0)
+    two_stage: bool = True
 
 
 class TrainConfig(_ConfigModel):
@@ -60,9 +64,10 @@ class LoggerConfig(_ConfigModel):
     # 清理在轮转时触发；未配置轮转时在处理器关闭时触发，不是定时清理任务。
     retention: str | None = Field(default="14 days", min_length=1)
     # 历史日志文件的归档压缩格式；None 表示保留未压缩文件。
-    compression: Literal[
-        "zip", "gz", "bz2", "xz", "lzma", "tar", "tar.gz", "tar.bz2", "tar.xz"
-    ] | None = "zip"
+    compression: (
+        Literal["zip", "gz", "bz2", "xz", "lzma", "tar", "tar.gz", "tar.bz2", "tar.xz"]
+        | None
+    ) = "zip"
     # True：先将日志放入队列，由后台线程写入，减少日志 I/O 对训练的阻塞。
     # False：在调用 logger 的线程中直接写入；使用队列时可用 logger.complete() 等待写完。
     enqueue: bool = True
@@ -83,6 +88,9 @@ class LoggerConfig(_ConfigModel):
 class AppConfig(_ConfigModel):
     """实验配置，基础训练字段必填，预处理和日志参数提供默认值。"""
 
+    # 运行目录默认指向项目根目录
+    root: Path = Field(default_factory=lambda: Path(__file__).resolve().parent)
+    seed: int = Field(lt=2**32)  # 随机种子
     model: ModelConfig
     train_config: TrainConfig
     logger: LoggerConfig = Field(default_factory=LoggerConfig)

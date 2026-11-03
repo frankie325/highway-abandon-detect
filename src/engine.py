@@ -2,13 +2,16 @@ import random
 
 import numpy as np
 import torch
+import time
 from loguru import logger
-
-from src.config import load_config
+from pathlib import Path
+from omegaconf import OmegaConf
+from tqdm import tqdm
+from src.config import AppConfig, load_config
 from src.datasets.load_raod import build_dataloader
 from src.utils.logger import setup_logging
-from tqdm import tqdm
-
+from src.models import build_model
+from src.utils.tensors import NestedTensor
 
 # def train():
 #     args = load_config()
@@ -43,22 +46,53 @@ from tqdm import tqdm
 
 
 class Engine:
-    def __init__(self):
-        # pass
-        args = load_config()
-        logger.info("配置加载完成：{}", args)
-        setup_logging(args.logger)
-        self.random_seed(args.model.seed)
-        self.args = args
+    def __init__(self, args: dict[str, object] | None = None):
+        args = args or {}
+        config = load_config()
+
+        config.root = Path(__file__).resolve().parent.parent
+        # 递归合并：以文件配置为基础，args 只覆盖显式传入的字段。
+        # 例如覆盖 model.seed 时，仍保留 model 中的其他配置；列表则整体替换。
+        merged = OmegaConf.merge(config.model_dump(), args)
+        config = AppConfig.model_validate(
+            OmegaConf.to_container(merged, resolve=True, throw_on_missing=True)
+        )
+        logger.info("配置加载完成：{}", config)
+        setup_logging(config.logger)
+        self.random_seed(config.seed)
+        self.config = config
 
     def train(self):
-        train_config = self.args.train_config
+        train_config = self.config.train_config
 
+        model = build_model(self.config)
         data_loader = build_dataloader(
-            True, train_config, patch_size=self.args.model.patch_size
+            True, train_config, patch_size=self.config.model.patch_size
         )
 
-    def eval():
+        start = time.time()
+        for step, batch in tqdm(enumerate(data_loader)):
+            # print(batch)
+            # print("pixel_values shape: ", batch["images"].shape)
+            tensors = NestedTensor(
+                batch["images"], batch["padding_masks"], batch["no_padding"]
+            )
+            model(tensors)
+            # print(features)
+            # print(type(features))
+            # print(features[0].shape)
+            # print(features[1].shape)
+            # print(features[2].shape)
+            # print(features[3].shape)
+            # print(features.feature_maps[4].shape)
+            # print(type(features))
+            break
+        end = time.time()
+        logger.debug(
+            f"num_workers={self.config.train_config.num_workers}: 1个batch耗时 {end-start:.2f} 秒"
+        )
+
+    def eval(self):
         pass
 
     def random_seed(self, seed: int = 42) -> None:

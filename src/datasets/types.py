@@ -26,3 +26,4 @@ class RAODBatch(TypedDict):
     boxes: list[torch.Tensor]  # 每张图为 float32 [N_i, 4]，缩放后的像素 xyxy。
     labels: list[torch.Tensor]  # 每张图为 int64 [N_i]，与对应框顺序一致。
     padding_masks: torch.Tensor  # bool，[B, H, W]，True 为补边区域。
+    no_padding: bool  # bool, 这批图像没有任何一张需要被 padding
