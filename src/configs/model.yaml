@@ -4,14 +4,21 @@ model:
   patch_size: 16
   out_indices: [3, 6, 9, 12] # Dinov3输出的特征图层数
   projector_scale: ["P3", "P4", "P5"]
-  project_hidden_dim: 256 # projector输出的维度
   # hidden_size: 769
   num_classes: 1 # 分类任务的类别数
-  num_queries: 100 # 解码器输入query的数量
   two_stage: true # 是否开启两阶段Detr
-
+  bbox_reparam: false # 两阶段是否采用边界框精修，开启时不直接预测初始bbox的绝对坐标
+  d_model: 256 # transformer的隐藏层维度
+  aux_loss: true # 是否使用辅助损失
+  num_queries: 100 # 解码器输入query的数量
+  num_decoder_layers: 6 # 解码器的层数
+  dim_feedforward: 2048 # 前馈层维度数
+  dropout: 0.1 # dropout概率，防止过拟合
+  group_detr: 8 # 分组查询数
+  sa_nheads: 8 # 解码器的self-attention头数
+  ca_nheads: 8 # 解码器的cross-attention头数
 train_config:
-  batch_size: 16
+  batch_size: 1
   epochs: 100
   num_workers: 4
   learning_rate: 0.001

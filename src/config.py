@@ -16,10 +16,18 @@ class ModelConfig(_ConfigModel):
     patch_size: int = Field(gt=0)
     out_indices: list[int] = Field(min_length=1)
     projector_scale: list[Literal["P3", "P4", "P5", "P6"]]
-    project_hidden_dim: int = Field(gt=0)
     num_classes: int = Field(gt=0)
-    num_queries: int = Field(gt=0)
     two_stage: bool = True
+    bbox_reparam: bool = True
+    d_model: int = Field(gt=0)
+    aux_loss:  bool = True
+    num_queries: int = Field(gt=0)
+    num_decoder_layers: int = Field(gt=0)
+    dim_feedforward: int = Field(gt=0)
+    dropout: float = Field(gt=0, lt=1)
+    group_detr: int = Field(gt=0)
+    sa_nheads: int = Field(gt=0)
+    ca_nheads: int = Field(gt=0)
 
 
 class TrainConfig(_ConfigModel):

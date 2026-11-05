@@ -115,7 +115,7 @@ class Joiner(nn.Sequential):
 
 def build_backbone(config: AppConfig):
     position_embedding_module = build_position_encoding(
-        config.model.project_hidden_dim, "v2"
+        config.model.d_model, "v2"
     )
 
     backbone = Backbone(
@@ -123,7 +123,7 @@ def build_backbone(config: AppConfig):
         pretrain_model=config.model.pretrain_model,
         out_indices=config.model.out_indices,
         freeze_encoder=True,
-        out_channels=config.model.project_hidden_dim,
+        out_channels=config.model.d_model,
         projector_scale=config.model.projector_scale,
     )
 
