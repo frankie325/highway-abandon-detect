@@ -71,12 +71,10 @@ class Engine:
         )
 
         start = time.time()
-        for step, batch in tqdm(enumerate(data_loader)):
+        for step, (tensors, targets) in tqdm(enumerate(data_loader)):
             # print(batch)
             # print("pixel_values shape: ", batch["images"].shape)
-            tensors = NestedTensor(
-                batch["images"], batch["padding_masks"], batch["no_padding"]
-            )
+
             model(tensors)
             # print(features)
             # print(type(features))

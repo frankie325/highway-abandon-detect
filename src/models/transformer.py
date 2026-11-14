@@ -871,7 +871,7 @@ class TransformerDecoder(nn.Module):
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
 
-        output = self.norm(output)
+        output = self.norm(output)  # b, num_queries * group_detr, d_model
         if self.return_intermediate:
             intermediate.pop()  # 最后一层循环了添加过一次，这里剔除一下
             intermediate.append(output)
@@ -891,7 +891,7 @@ class TransformerDecoder(nn.Module):
             logger.debug("解码器中间层精修参考框结果：bbox: {}", results[1].shape)
             return tuple(results)
 
-        logger.debug("解码器非中间层的最终输出：output:{}", output)
+        logger.debug("return_intermediate置为True，不会走这里，代码只做中间层的处理")
         res = output.unsqueeze(0)
         return res
 

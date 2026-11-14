@@ -44,6 +44,10 @@ class TrainConfig(_ConfigModel):
         default_factory=lambda: [1024, 1152, 1280], min_length=1
     )
     fix_scale_size: int = Field(default=1280, gt=0)
+    cost_class: float = Field(default=1.0, gt=0)
+    cost_bbox: float = Field(default=5.0, gt=0)
+    cost_giou: float = Field(default=2.0, gt=0)
+    focal_alpha: float = Field(default=0.25, gt=0)
 
 
 class LoggerConfig(_ConfigModel):

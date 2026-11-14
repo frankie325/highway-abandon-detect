@@ -31,6 +31,7 @@ class LWDETR(nn.Module):
         self.bbox_reparam = bbox_reparam
         self.aux_loss = aux_loss
         self.group_detr = group_detr
+        self.num_queries = num_queries
 
         self.class_embed = nn.Linear(hidden_dim, num_classes)  # 分类预测
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)  # bbox预测
@@ -63,7 +64,7 @@ class LWDETR(nn.Module):
             - samples.mask: 二值掩码，形状为 [batch_size x H x W]，填充像素处为 1
 
         返回一个字典，包含以下元素：
-            - "pred_logits": 所有查询（含背景类 no-object）的分类 logits，
+            - "pred_logits": 所有查询的前景类别 logits（sigmoid 分类无独立背景类），
                             形状为 [batch_size x num_queries x num_classes]
             - "pred_boxes": 所有查询的归一化边界框坐标，表示为
                             (center_x, center_y, width, height)。这些值已归一化到 [0, 1]，
@@ -142,9 +143,10 @@ class LWDETR(nn.Module):
             out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
 
             """
-            中间层输出用来计算你辅助损失
+            中间层输出用来计算辅助损失
             [
-                {   pred_logits: (b, num_queries * group_detr, num_classes),
+                {   
+                    pred_logits: (b, num_queries * group_detr, num_classes),
                     pred_boxes: (b, num_queries * group_detr, 4)
                 }
             ...
@@ -170,10 +172,10 @@ class LWDETR(nn.Module):
                     # b, topk, n_classes
                     cls_enc_list.append(cls_enc_gidx)
                 # b, topk * group_detr, n_classes
-                cls_enc = torch.cat(hs_enc_list, dim=1)
+                cls_enc = torch.cat(cls_enc_list, dim=1)
                 out["enc_outputs"] = {"pred_logits": cls_enc, "pred_boxes": ref_enc}
 
-        for i, output in enumerate(out["aux_outputs"]):
+        for i, output in enumerate(out.get("aux_outputs", [])):
             logger.debug(
                 "Decoder中间层{}用于辅助损失的预测输出pred_logits：{}, pred_boxes{}",
                 i + 1,
@@ -190,9 +192,29 @@ class LWDETR(nn.Module):
                 out["enc_outputs"]["pred_logits"].shape,
             )
             logger.debug(
-                "两阶段时编码器输出out.enc_outputs.pred_boxes: {}",
+                "两阶段时编码器输出精修框out.enc_outputs.pred_boxes: {}",
                 out["enc_outputs"]["pred_boxes"].shape,
             )
+
+        """
+        out = {
+            # 最后一层输出
+            "pred_logits": output_classes[-1],  # b, num_queries * group_detr, num_classes
+            "pred_boxes": output_boxes[-1],  # b, num_queries * group_detr, 4
+            # 中间辅助层输出
+            "aux_outputs": [
+                {
+                    "pred_logits": output_classes[i],  # b, num_queries * group_detr, num_classes
+                    "pred_boxes": output_boxes[i],  # b, num_queries * group_detr, 4
+                }
+            ]
+            # 两阶段时编码器输出
+            "enc_outputs": {
+                "pred_logits": cls_enc,  # b, topk * group_detr, num_classes
+                "pred_boxes": ref_enc,  # b, topk * group_detr, 4
+            }
+        }
+        """
         return out
 
     def _set_aux_loss(self, outputs_class: torch.Tensor, outputs_coord: torch.Tensor):

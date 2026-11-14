@@ -5,6 +5,8 @@ from albumentations.pytorch import ToTensorV2
 from PIL import Image, ImageDraw
 from loguru import logger
 
+from src.utils.box_ops import box_xyxy_to_cxcywh
+
 
 class AlbTransform:
     """同步转换 RGB 图片和像素坐标边界框，不做图像裁剪或 padding。
@@ -60,14 +62,15 @@ class AlbTransform:
     def __call__(
         self,
         image: Image.Image,
-        boxes: list[list[float]],
+        boxes: list[tuple[float, float, float, float]],
     ) -> dict[str, torch.Tensor]:
         """转换单张图片及其边界框。
 
         image：PIL 图片，转换为 RGB 后进行增强。
         boxes：像素 xyxy 坐标列表，每个框包含 4 个浮点数，无目标时传入 []。
-        返回 image（归一化后的 CHW float32 张量）与 boxes（像素 xyxy，
-        形状为 (N, 4) 的 float32 张量）。框的数量和顺序保持不变。
+        返回 image（按 mean/std 归一化后的 CHW float32 张量）与 boxes
+        （归一化到 [0, 1] 的 cxcywh 格式，形状为 (N, 4) 的 float32 张量）。
+        框的数量和顺序保持不变。
         """
         # Albumentations 接收 NumPy 图片，将 PIL 图片转换为 HWC RGB 数组。
         # 直接在此确保连续（C-contiguous），满足 Albumentations/cv2 对图像内存布局的要求；
@@ -84,12 +87,22 @@ class AlbTransform:
 
         # 使用关键字传参，让同一次随机变换同时作用于图片和边界框。
         result = self.transform(image=image_array, bboxes=boxes_array)
+        image_out = result["image"]  # ToTensorV2 输出 CHW 张量
+        boxes = result["bboxes"]
+        # 用变换后图片的真实尺寸做归一化基准，因为 LongestMaxSize 已把图片
+        # 与边界框缩放到新坐标系；若仍用原始尺寸会导致归一化值错误。
+        height, width = int(image_out.shape[-2]), int(image_out.shape[-1])
+        boxes_ts = torch.as_tensor(boxes, dtype=torch.float32)
+        boxes_ts = box_xyxy_to_cxcywh(boxes_ts)  # 转换为cx,cy,w,h    N, 4
+
+        # 归一化
+        boxes_ts = boxes_ts / torch.as_tensor(
+            [width, height, width, height], dtype=torch.float32
+        )
         return {
-            "image": result["image"],
+            "image": image_out,
             # 固定 dtype 和形状，保证无目标样本也返回 (0, 4)。
-            "boxes": torch.as_tensor(result["bboxes"], dtype=torch.float32).reshape(
-                -1, 4
-            ),
+            "boxes": boxes_ts,
         }
 
 
@@ -135,9 +148,8 @@ def tensor_to_image(
     preview = Image.fromarray(restored.numpy())
 
     if padding_mask is not None:
-        if (
-            padding_mask.dtype != torch.bool
-            or tuple(padding_mask.shape) != tuple(pixels.shape[-2:])
+        if padding_mask.dtype != torch.bool or tuple(padding_mask.shape) != tuple(
+            pixels.shape[-2:]
         ):
             raise ValueError("padding_mask 必须为与图片宽高一致的 bool [H, W] 张量")
         if highlight_padding:
@@ -180,9 +192,10 @@ def batch_tensor_to_images(
     if len(boxes) != batch_size:
         raise ValueError("boxes 的图片数量必须与 images 一致")
     if padding_masks is not None:
-        if (
-            padding_masks.dtype != torch.bool
-            or tuple(padding_masks.shape) != (batch_size, height, width)
+        if padding_masks.dtype != torch.bool or tuple(padding_masks.shape) != (
+            batch_size,
+            height,
+            width,
         ):
             raise ValueError("padding_masks 必须为与批次尺寸一致的 bool [B, H, W] 张量")
 
@@ -217,7 +230,8 @@ def batch_tensor_to_images(
     marked = highlight_padding and padding_masks is not None
     legend = (
         "red: boxes | magenta: padding overlay"
-        if marked else "red: boxes | padding: original fill color"
+        if marked
+        else "red: boxes | padding: original fill color"
     )
     draw.text((gap, 4), legend, fill="white")
     for index, preview in enumerate(previews):
@@ -348,6 +362,8 @@ if __name__ == "__main__":
             grid.save(output_dir / f"batch_{mode}{suffix}.png")
         logger.info(
             "{} 批次预览：images={}，原始样本索引={}",
-            mode, tuple(batch["images"].shape), indices,
+            mode,
+            tuple(batch["images"].shape),
+            indices,
         )
     logger.success("检查通过，原图、训练和验证的带框预览已保存到：{}", output_dir)

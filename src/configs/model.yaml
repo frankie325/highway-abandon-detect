@@ -27,6 +27,10 @@ train_config:
   multi_scale: true
   scale_sizes: [768, 960, 1152]
   fix_scale_size: 960
+  cost_class: 1.0 # 分类代价权重
+  cost_bbox: 5.0 # bbox代价权重
+  cost_giou: 2.0 # giou代价权重
+  focal_alpha: 0.25 # 计算损失代价时 focal loss 的类别平衡权重
 logger:
   level: "DEBUG" # 终端最低级别。
   file_level: "DEBUG" # 文件保留更详细的调试信息。

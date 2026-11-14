@@ -3,6 +3,7 @@ import torch
 
 from .transforms import AlbTransform
 from .types import RAODSample, RAODBatch
+from src.utils.tensors import NestedTensor
 
 
 class RAODCollate:
@@ -40,7 +41,9 @@ class RAODCollate:
             for size in sizes
         }
 
-    def __call__(self, batch: list[RAODSample]) -> RAODBatch:
+    def __call__(
+        self, batch: list[RAODSample]
+    ) -> tuple[NestedTensor, list[dict[str, torch.Tensor]]]:
         if not batch:
             raise ValueError("batch 不能为空")
         if any(len(sample["boxes"]) != len(sample["labels"]) for sample in batch):
@@ -101,23 +104,33 @@ class RAODCollate:
                 # 按图片尺寸标记有效区域，与像素值无关：原图中的黑色像素同样有效。
                 padding_mask[i, :height, :width] = False
 
+        targets = [
+            {
+                "labels": torch.tensor(sample["labels"], dtype=torch.int64),
+                "boxes": results[i]["boxes"],
+            }
+            for i, sample in enumerate(batch)
+        ]  # list[ { 'labels': [num_objects], 'boxes': [num_objects, 4]} ]
+
+        tensors = NestedTensor(
+            pixel_values, padding_mask, no_padding  # (B, C, H, W)  # (B, H, W)
+        )
+        return tensors, targets
         # 检测框和类别数量可能不同，按图片保留变长列表，不强行堆叠。
-        return {
-            "images": pixel_values,  # (B, C, H, W)
-            "image_ids": [sample["image_id"] for sample in batch],
-            "no_padding": no_padding,
-            "origins": torch.tensor(
-                [[sample["width"], sample["height"]] for sample in batch],
-                dtype=torch.int64,
-            ),
-            "boxes": [
-                result["boxes"] for result in results
-            ],  # (B, N, 4) 一个样本有N个box
-            "labels": [
-                torch.tensor(sample["labels"], dtype=torch.int64) for sample in batch
-            ],  # (B, N)
-            "padding_masks": padding_mask,  # (B, H, W)
-        }
+        # return {
+        #     "images": pixel_values,  # (B, C, H, W)
+        #     "image_ids": [sample["image_id"] for sample in batch],
+        #     "no_padding": no_padding,
+        #     "origins": torch.tensor(
+        #         [[sample["width"], sample["height"]] for sample in batch],
+        #         dtype=torch.int64,
+        #     ),
+        #     "boxes": [result["boxes"] for result in results],  # list[N, 4), ...]
+        #     "labels": [
+        #         torch.tensor(sample["labels"], dtype=torch.int64) for sample in batch
+        #     ],  # list[(N,) ,...]
+        #     "padding_masks": padding_mask,  # (B, H, W)
+        # }
 
     def get_scale_size(self) -> int:
         """训练时随机选择一个缩放尺寸，非训练时返回固定尺寸。"""
