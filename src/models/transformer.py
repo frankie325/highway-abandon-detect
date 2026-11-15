@@ -87,6 +87,7 @@ def gen_encoder_output_proposals(
     Output:
         - output_memory: bs, \sum{hw}, d_model
         - output_proposals: bs, \sum{hw}, 4
+        - valid_proposals: bs, \sum{hw}，True 表示可作为候选的位置
     """
     batch_size, _, _ = memory.shape
     current = 0  # 用来从序列中取出特征层
@@ -189,7 +190,8 @@ def gen_encoder_output_proposals(
         ~output_proposals_valid, float(0)
     )  # b, \sum{h*w}, d_model
 
-    return output_memory.to(memory.dtype), output_proposals.to(memory.dtype)
+    valid_proposals = output_proposals_valid.squeeze(-1) & ~memory_padding_mask
+    return output_memory.to(memory.dtype), output_proposals.to(memory.dtype), valid_proposals
 
 
 class Transformer(nn.Module):
@@ -357,9 +359,14 @@ class Transformer(nn.Module):
             assert self.enc_out_class_embed is not None
             assert self.enc_out_bbox_embed is not None
 
-            output_memory, output_proposals = gen_encoder_output_proposals(
+            output_memory, output_proposals, valid_proposals = gen_encoder_output_proposals(
                 memory, mask_flatten, spatial_shapes_hw, unsigmoid=not self.bbox_reparam
             )
+            # 每组 Decoder query 都需要有效的初始候选；不足时提示调整输入尺寸或 query 数。
+            if (valid_proposals.sum(dim=1) < self.num_queries).any():
+                raise ValueError(
+                    "有效候选框数量不足 num_queries，请增大输入图像尺寸或减少 num_queries"
+                )
 
             """
             标准 DETR 用一对一二分匹配：num_queries 个查询（如 300）和图像里的真实框做最优匹配。早期训练时：
@@ -385,6 +392,8 @@ class Transformer(nn.Module):
 
                 # 取num_classes中最大的值，即为预测的类别 b, \sum{h*w}
                 values, _ = enc_outputs_class_unselected_gidx.max(-1)
+                # 清零特征经过线性层后仍可能得到高分，必须在排序时排除无效位置。
+                values = values.masked_fill(~valid_proposals, float("-inf"))
 
                 # 用来取置信度前topk个框的索引
                 _, topk_proposals_gidx = torch.topk(values, topk, dim=1)  # b, topk
@@ -433,7 +442,7 @@ class Transformer(nn.Module):
 
                     # 宽高：新 wh = exp(预测值) * 原 wh
                     enc_outputs_coord_wh_gidx = (
-                        enc_outputs_coord_delta_gidx[..., :2].exp()
+                        enc_outputs_coord_delta_gidx[..., 2:].exp()
                         * output_proposals_gidx[..., 2:]
                     )
 
@@ -597,14 +606,15 @@ class Transformer(nn.Module):
         logger.debug(
             "Transformer返回结果：参考点输出references：{}", return_values[1].shape
         )
-        logger.debug(
-            "Transformer返回结果：编码器预测的前topk个采样位置输出memory_ts：{}",
-            return_values[2].shape,
-        )
-        logger.debug(
-            "Transformer返回结果：编码器预测的前topk个锚框boxes_ts：{}",
-            return_values[3].shape,
-        )
+        if self.two_stage:
+            logger.debug(
+                "Transformer返回结果：编码器预测的前topk个采样位置输出memory_ts：{}",
+                return_values[2].shape,
+            )
+            logger.debug(
+                "Transformer返回结果：编码器预测的前topk个锚框boxes_ts：{}",
+                return_values[3].shape,
+            )
         return tuple(return_values)
 
 
@@ -866,6 +876,8 @@ class TransformerDecoder(nn.Module):
             # 保存精修参考框，最后一层不保存，因为最后一层没有精修
             if layer_index != self.num_layers - 1:
                 hs_refpoints_unsigmoid.append(new_refpoints_unsigmoid)
+                # 下一层按精修框采样；截断经采样参考框的跨层梯度。
+                refpoints_unsigmoid = new_refpoints_unsigmoid.detach()
 
             # 返回中间层的输出
             if self.return_intermediate:

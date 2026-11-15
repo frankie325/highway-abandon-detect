@@ -1,5 +1,6 @@
 from collections.abc import Callable
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
@@ -280,7 +281,12 @@ class SetCriterion(nn.Module):
         num_boxes_tensor = torch.as_tensor(
             num_boxes, dtype=torch.float, device=self._output_device(outputs)
         )
-        return num_boxes_tensor
+        # DDP 对参数梯度取各进程平均，因此分母也使用各进程目标数的平均值。
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(num_boxes_tensor)
+            num_boxes_tensor /= dist.get_world_size()
+        # 允许空标注批次：框损失为 0，负样本分类损失仍参与训练。
+        return num_boxes_tensor.clamp(min=1.0)
 
     def _get_src_permutation_idx(
         self, indices: list[tuple[torch.Tensor, torch.Tensor]]
@@ -431,7 +437,8 @@ class SetCriterion(nn.Module):
         ]
         """
         all_indices = [
-            self.matcher(layer_outputs, targets) for layer_outputs in matched_outputs
+            self.matcher(layer_outputs, targets, group_detr=group_detr)
+            for layer_outputs in matched_outputs
         ]
 
         losses = {}

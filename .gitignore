@@ -8,6 +8,7 @@ wheels/
 data/**
 cache/**
 papers/**
+tests/**
 logs/
 
 # Virtual environments
