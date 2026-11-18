@@ -191,7 +191,11 @@ def gen_encoder_output_proposals(
     )  # b, \sum{h*w}, d_model
 
     valid_proposals = output_proposals_valid.squeeze(-1) & ~memory_padding_mask
-    return output_memory.to(memory.dtype), output_proposals.to(memory.dtype), valid_proposals
+    return (
+        output_memory.to(memory.dtype),
+        output_proposals.to(memory.dtype),
+        valid_proposals,
+    )
 
 
 class Transformer(nn.Module):
@@ -209,6 +213,7 @@ class Transformer(nn.Module):
         group_detr: int = 1,
         two_stage: bool = False,
         num_feature_levels: int = 4,
+        dec_n_points: int = 4,
         bbox_reparam: bool = False,
     ):
         super().__init__()
@@ -233,7 +238,7 @@ class Transformer(nn.Module):
             # normalize_before,
             group_detr=group_detr,
             num_feature_levels=num_feature_levels,
-            # dec_n_points=dec_n_points,
+            dec_n_points=dec_n_points,
             skip_self_attn=False,
         )
 
@@ -359,8 +364,13 @@ class Transformer(nn.Module):
             assert self.enc_out_class_embed is not None
             assert self.enc_out_bbox_embed is not None
 
-            output_memory, output_proposals, valid_proposals = gen_encoder_output_proposals(
-                memory, mask_flatten, spatial_shapes_hw, unsigmoid=not self.bbox_reparam
+            output_memory, output_proposals, valid_proposals = (
+                gen_encoder_output_proposals(
+                    memory,
+                    mask_flatten,
+                    spatial_shapes_hw,
+                    unsigmoid=not self.bbox_reparam,
+                )
             )
             # 每组 Decoder query 都需要有效的初始候选；不足时提示调整输入尺寸或 query 数。
             if (valid_proposals.sum(dim=1) < self.num_queries).any():
@@ -922,6 +932,7 @@ def build_transformer(config: AppConfig) -> Transformer:
         group_detr=config.model.group_detr,
         two_stage=config.model.two_stage,
         num_feature_levels=len(config.model.projector_scale),
+        dec_n_points=config.model.dec_n_points,
         bbox_reparam=config.model.bbox_reparam,
     )
 

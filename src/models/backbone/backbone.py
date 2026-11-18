@@ -1,3 +1,4 @@
+from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,6 +39,9 @@ class Backbone(nn.Module):
         if freeze_encoder:
             for param in self.encoder.parameters():
                 param.requires_grad = False
+        else:
+            # Transformers 的 from_pretrained 默认可能返回 eval 模式；解冻后显式启用训练模式。
+            self.encoder.train()
 
     @staticmethod
     def level_mask(
@@ -63,7 +67,7 @@ class Backbone(nn.Module):
         tensor_list: NestedTensor,
     ) -> list[NestedTensor]:
         # tensor_list.tensors: (B, C, H, W)
-        raw_feats = self.encoder(tensor_list.tensors)
+        raw_feats = self.encoder(tensor_list.tensors, tensor_list.mask)
         feats = self.projector(raw_feats)
 
         no_padding = tensor_list.no_padding
@@ -90,6 +94,73 @@ class Backbone(nn.Module):
             )
         return outs
 
+    def get_named_param_lr_pairs(
+        self,
+        config: AppConfig,
+        prefix: str = "backbone.0",  # prefix: 主干网在RAODDETR整个模型的参数名前缀
+    ) -> dict[str, dict[str, Any]]:
+        # 从实际 DINOv3 模型读取 Transformer 层数；out_indices 只表示提取哪些层。
+        num_layers = len(self.encoder.dino.model.layer)
+        backbone_key = "backbone.0.encoder"
+        named_param_lr_pairs = {}
+        for n, p in self.named_parameters():
+            n = prefix + "." + n
+            # 如果encoder参数没有冻结，则分层处理学习率
+            if backbone_key in n and p.requires_grad:
+                lr = (
+                    config.train_config.lr_encoder
+                    * get_lr_decay_rate(
+                        n,
+                        lr_decay_rate=config.train_config.lr_vit_layer_decay,
+                        num_layers=num_layers,
+                    )
+                    * config.train_config.lr_component_decay**2
+                )
+                wd = config.train_config.weight_decay * get_weight_decay_rate(n)
+                named_param_lr_pairs[n] = {
+                    "params": p,
+                    "lr": lr,
+                    "weight_decay": wd,
+                }
+        return named_param_lr_pairs
+
+
+def get_lr_decay_rate(
+    name: str, lr_decay_rate: float = 1.0, num_layers: int = 12
+) -> float:
+    """Calculate lr decay rate for different ViT blocks.
+
+    Args:
+        name: Parameter name.
+        lr_decay_rate: Base lr decay rate.
+        num_layers: Number of ViT blocks.
+
+    Returns:
+        Lr decay rate for the given parameter.
+    """
+    layer_id = num_layers + 1
+    if name.startswith("backbone"):
+        if "embeddings" in name:
+            layer_id = 0
+        elif ".layer." in name and ".residual." not in name:
+            layer_id = int(name[name.find(".layer.") :].split(".")[2]) + 1
+    # 浅层提取通用低级特征（边缘、纹理），预训练权重已经很好，用小学习率保护它不被破坏；
+    # 深层更贴近下游检测任务，用大学习率适应新任务
+    return lr_decay_rate ** (num_layers + 1 - layer_id)
+
+
+def get_weight_decay_rate(name: str, weight_decay_rate: float = 1.0) -> float:
+    if (
+        ("gamma" in name)
+        or ("pos_embed" in name)
+        or ("rel_pos" in name)
+        or ("bias" in name)
+        or ("norm" in name)
+        or ("embeddings" in name)
+    ):
+        weight_decay_rate = 0.0
+    return weight_decay_rate
+
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone: Backbone, position_embedding: nn.Module) -> None:
@@ -114,15 +185,13 @@ class Joiner(nn.Sequential):
 
 
 def build_backbone(config: AppConfig):
-    position_embedding_module = build_position_encoding(
-        config.model.d_model, "v2"
-    )
+    position_embedding_module = build_position_encoding(config.model.d_model, "v2")
 
     backbone = Backbone(
         config=config,
         pretrain_model=config.model.pretrain_model,
         out_indices=config.model.out_indices,
-        freeze_encoder=True,
+        freeze_encoder=config.model.freeze_encoder,
         out_channels=config.model.d_model,
         projector_scale=config.model.projector_scale,
     )

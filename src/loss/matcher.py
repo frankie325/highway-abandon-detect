@@ -286,8 +286,8 @@ def build_matcher(config: AppConfig) -> HungarianMatcher:
 
 
 if __name__ == "__main__":
-    # ===== 与 LWDETR.forward 输出结构对齐的假数据（batch 位于第 0 维） =====
-    # 说明：LWDETR 用 sigmoid 多分类，pred_logits 不含独立背景类；
+    # ===== 与 HAODDETR.forward 输出结构对齐的假数据（batch 位于第 0 维） =====
+    # 说明：HAODDETR 用 sigmoid 多分类，pred_logits 不含独立背景类；
     #       group_detr 默认 1，故查询数 = num_queries * group_detr = num_queries。
     bs, num_queries, num_classes = 2, 10, 9
 

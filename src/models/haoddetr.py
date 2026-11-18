@@ -11,7 +11,7 @@ from .backbone.backbone import Joiner
 from src.utils.tensors import NestedTensor
 
 
-class LWDETR(nn.Module):
+class HAODDETR(nn.Module):
 
     def __init__(
         self,

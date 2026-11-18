@@ -1,14 +1,14 @@
 from .backbone.dinov3 import DinoV3
 from .backbone.backbone import build_backbone
-from .lwdetr import LWDETR
+from .haoddetr import HAODDETR
 from .transformer import build_transformer
 from src.config import AppConfig
 
 
-def build_model(config: AppConfig) -> LWDETR:
+def build_model(config: AppConfig) -> HAODDETR:
     backbone = build_backbone(config)
     transformer = build_transformer(config)
-    model = LWDETR(
+    model = HAODDETR(
         backbone,
         transformer,
         num_classes=config.model.num_classes,

@@ -9,7 +9,8 @@ data/**
 cache/**
 papers/**
 tests/**
-logs/
+logs/**
+outputs/**
 
 # Virtual environments
 .venv

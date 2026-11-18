@@ -1,0 +1,51 @@
+seed: 42 # 随机种子
+model_config: haod_detr_base.yaml # 模型配置文件，相对于本文件所在目录。
+train_config:
+  batch_size: 2
+  epochs: 60
+  num_workers: 4
+  lr: 0.0001 # 基础学习率
+  lr_encoder: 0.00015 # DINOv3 编码器的基础学习率；冻结时不参与优化。
+  lr_vit_layer_decay: 0.8 # DINOv3 层间衰减系数，越靠前的层学习率越小。
+  lr_component_decay: 0.7 # Decoder 乘一次，DINOv3 编码器乘两次。
+  optimizer: AdamW # 可选 SGD、Adam、AdamW；SGD 使用下方动量。
+  momentum: 0.9 # SGD 的动量系数；Adam 和 AdamW 不使用此项。
+  weight_decay: 0.0 # 权重衰减；默认 0 保持已有 Adam 训练行为。
+  lr_scheduler: cosine # 学习率策略：cosine（含 Warmup）或 step。
+  step_size: 30 # step 策略每隔多少个 epoch 衰减一次。
+  step_gamma: 0.1 # step 策略每次将各组学习率乘以该系数。
+  warmup_ratio: 0.05 # cosine 策略预热步数占总优化器步数的比例；0 表示不预热。
+  min_lr_ratio: 0.0001 # 学习率下限，防止cosine 策略结束时， 学习率变为0。
+  loss: ia_bce # 分类使用 ['ia_bce', 'varifocal_loss' , 'position_supervised_loss']，框使用 L1 和 GIoU
+  loss_weights: { loss_ce: 1.0, loss_bbox: 5.0, loss_giou: 2.0 }
+  resume: false # 是否从输出目录下的 checkpoints/last.ckpt 恢复训练。
+  multi_scale: true
+  scale_sizes: [768, 832, 896, 960, 1024, 1088, 1152] # 训练时按批次随机选择最长边；均为 patch_size=16 的倍数。
+  fix_scale_size: 768 # 固定训练时最长边为 768 像素，不随机选择。
+  cost_class: 1.0 # 分类代价权重
+  cost_bbox: 5.0 # bbox代价权重
+  cost_giou: 2.0 # giou代价权重
+  focal_alpha: 0.25 # 计算损失代价时 focal loss 的类别平衡权重
+metrics:
+  max_detections: 100 # 每张图片参与评估的最高分预测数；mAP 不使用置信度阈值过滤。
+  confusion_score_threshold: 0.3 # 混淆矩阵使用的预测置信度阈值。
+  confusion_iou_threshold: 0.5 # 混淆矩阵一对一匹配的 IoU 阈值。
+logger:
+  level: "INFO" # 终端最低级别。
+  file_level: "DEBUG" # 文件保留更详细的调试信息。
+  console_enabled: true
+  file_enabled: true
+  log_dir: "logs" # 相对于项目根目录。
+  colorize: true # 终端支持颜色时启用，文件始终不包含颜色控制符。
+  rotation: "50 MB" # 单个文件达到阈值后轮转。
+  retention: "14 days" # 轮转时清理超出期限的旧日志。
+  compression: "zip"
+  enqueue: true # 队列写入，减少日志 I/O 对训练调用的阻塞。
+  backtrace: true
+  diagnose: false # 异常中不展开变量值，避免输出大量张量。
+  serialize: false # true 时文件输出为 JSON，终端仍为可读文本。
+swanlab:
+  project: highway-abandon-detect # SwanLab 项目名称，同一项目下可比较实验。
+  experiment_name: "haod-detr-training" # 基础实验名称，启动时自动追加本地时间。
+  score_threshold: 0.3 # 预测图显示的最低置信度，范围为 0 到 1。
+  max_predictions: 20 # 每张验证图片最多显示的预测框数量。
