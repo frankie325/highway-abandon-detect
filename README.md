@@ -6,13 +6,47 @@
 
 日志配置位于 `src/configs/index.yaml` 的 `logger` 节点：终端默认 INFO、文件默认 DEBUG，文件按时间命名写入项目根目录的 `logs/`，支持颜色、轮转、保留期限和压缩。
 
+## 前置准备
+
+### Hugging Face 模型授权
+
+默认 DINOv3 权重来自受控模型 [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m)。首次训练前需要：
+
+1. 登录 Hugging Face，打开模型页面，点击 **Agree and access repository** 或 **Request access**，确保当前账号已获得访问权限。
+2. 在 [Access Tokens](https://huggingface.co/settings/tokens) 创建具有 `read` 权限的 token；token 必须属于已获得模型访问权限的账号。
+3. 在项目环境中登录（凭据由 Hugging Face CLI 管理）：
+
+```bash
+uv run hf auth login
+# 旧版本 huggingface_hub 使用：
+uv run huggingface-cli login
+```
+
+按提示粘贴 token。不要将 token 写入代码或提交到 Git。可通过以下命令验证：
+
+```bash
+uv run python -c "from huggingface_hub import HfApi; print(HfApi().whoami())"
+uv run python -c "from huggingface_hub import hf_hub_download; print(hf_hub_download('facebook/dinov3-vitb16-pretrain-lvd1689m', 'config.json'))"
+```
+
+如果仍提示 `Access to model ... is restricted`，请检查 token 所属账号是否已经接受访问条款；必要时先执行 `uv run hf auth logout`，再重新登录。模型 ID 来自 `src/configs/haod_detr_base.yaml` 的 `pretrain_model`；获得权重后也可改为本地模型目录。
+
+### SwanLab 登录
+
+训练通过 SwanLab 云端记录实验。首次使用需登录：
+
+```bash
+uv run swanlab login
+```
+
+按提示在浏览器完成登录或粘贴 API Key。凭据由 SwanLab CLI 管理，不写入配置文件，也不需要 `.env`。
+
 ## 训练与实验记录
 
-训练使用 PyTorch Lightning 和 SwanLab 云端。安装项目依赖并登录 SwanLab 后启动：
+完成上述前置准备后启动：
 
 ```bash
 uv sync
-uv run swanlab login
 uv run python train.py
 ```
 
