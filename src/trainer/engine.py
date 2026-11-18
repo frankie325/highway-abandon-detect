@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from swanlab.integration.pytorch_lightning import SwanLabLogger
 from src.config import SwanLabConfig, load_config
-from src.datasets.load_raod import build_dataloader
+from src.trainer.lightning_data_module import LitHAODDETRDataModule
 from src.utils.logger import setup_logging
 from src.trainer.lightning_module import LitHAODDETR
 
@@ -62,15 +62,7 @@ class Engine:
         # Lightning 统一设置随机源；workers=True 还会为 DataLoader worker 配置种子。
         # 数据集代码另外给每个 Albumentations 对象设置独立随机种子。
         pl.seed_everything(self.config.seed, workers=True)
-        train_loader = build_dataloader(
-            True, config, patch_size=self.config.model.patch_size, seed=self.config.seed
-        )
-        val_loader = build_dataloader(
-            False,
-            config,
-            patch_size=self.config.model.patch_size,
-            seed=self.config.seed,
-        )
+        datamodule = LitHAODDETRDataModule(self.config)
         # LightningModule 描述一个批次如何运行；Trainer 在后面驱动完整训练过程。
         task = LitHAODDETR(self.config)
         experiment = self._experiment(settings)
@@ -107,8 +99,7 @@ class Engine:
             try:
                 trainer.fit(
                     task,
-                    train_dataloaders=train_loader,
-                    val_dataloaders=val_loader,
+                    datamodule=datamodule,
                     ckpt_path=checkpoint_path,
                 )
             except ValueError as exc:
@@ -129,12 +120,7 @@ class Engine:
         config = self.config.train_config
         settings = self.config.swanlab
         pl.seed_everything(self.config.seed, workers=True)
-        loader = build_dataloader(
-            False,
-            config,
-            patch_size=self.config.model.patch_size,
-            seed=self.config.seed,
-        )
+        datamodule = LitHAODDETRDataModule(self.config)
         task = LitHAODDETR(self.config)
         experiment = self._experiment(settings)
         try:
@@ -150,7 +136,7 @@ class Engine:
             )
             # 返回每个验证 DataLoader 的指标字典；verbose=True 同时打印验证结果。
             results = trainer.validate(
-                task, dataloaders=loader, ckpt_path=checkpoint, verbose=True
+                task, datamodule=datamodule, ckpt_path=checkpoint, verbose=True
             )
             logger.info("验证结果：{}", results)
             return results
