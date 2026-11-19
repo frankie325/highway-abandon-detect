@@ -4,7 +4,7 @@ from src.trainer.cli import build_parser, config_overrides
 
 
 def main(argv=None):
-    args = build_parser(training=False).parse_args(argv)
+    args = build_parser(mode="eval").parse_args(argv)
     from src.trainer.engine import Engine
 
     Engine(config_overrides(args), outputs=args.outputs).eval()

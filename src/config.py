@@ -5,6 +5,9 @@ from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
 
+type RAODDatasetName = Literal["raod_small", "raod"]
+
+
 class _ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
@@ -43,6 +46,7 @@ class LossWeightsConfig(_ConfigModel):
 class TrainConfig(_ConfigModel):
     """训练配置。"""
 
+    dataset: RAODDatasetName = "raod_small"
     batch_size: int = Field(gt=0)
     epochs: int = Field(gt=0)
     num_workers: int = Field(ge=0)
@@ -83,23 +87,31 @@ class TrainConfig(_ConfigModel):
         return value.strip().lower() if isinstance(value, str) else value
 
 
-class DetectionMetricsConfig(_ConfigModel):
-    """验证集检测指标和混淆矩阵参数。"""
+class EvaluateConfig(_ConfigModel):
+    """验证指标、混淆矩阵和验证预览参数。"""
 
     max_detections: int = Field(default=100, gt=0)
     confusion_score_threshold: float = Field(
         default=0.3, ge=0, le=1, allow_inf_nan=False
     )
     confusion_iou_threshold: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
+    preview_score_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
+    preview_max_predictions: int = Field(default=20, gt=0)
+
+
+class PredictConfig(_ConfigModel):
+    """独立图片预测参数。"""
+
+    batch_size: int = Field(default=1, gt=0)
+    max_detections: int = Field(default=100, gt=0)
+    score_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
 
 
 class SwanLabConfig(_ConfigModel):
-    """实验记录与验证图配置；登录凭据由 SwanLab 管理。"""
+    """实验记录配置，登录凭据由 SwanLab 管理。"""
 
     project: str = Field(default="highway-abandon-detect", min_length=1)
     experiment_name: str = Field(default="haod-detr-training", min_length=1)
-    score_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
-    max_predictions: int = Field(default=20, gt=0)
 
 
 class LoggerConfig(_ConfigModel):
@@ -157,7 +169,8 @@ class AppConfig(_ConfigModel):
     seed: int = Field(lt=2**32)  # 随机种子
     model: ModelConfig
     train_config: TrainConfig
-    metrics: DetectionMetricsConfig = Field(default_factory=DetectionMetricsConfig)
+    evaluate_config: EvaluateConfig = Field(default_factory=EvaluateConfig)
+    predict_config: PredictConfig = Field(default_factory=PredictConfig)
     logger: LoggerConfig = Field(default_factory=LoggerConfig)
     swanlab: SwanLabConfig = Field(default_factory=SwanLabConfig)
 

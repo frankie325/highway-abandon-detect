@@ -7,6 +7,7 @@ import torch
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 from src.config import AppConfig
+from src.datasets.types import DetectionBatch
 from src.loss.criterion import SetCriterion
 from src.loss.matcher import build_matcher
 from src.models import build_model
@@ -47,8 +48,8 @@ class LitHAODDETR(pl.LightningModule):
         )
         self.val_confusion = DetectionConfusionMatrix(
             num_classes=config.model.num_classes,
-            score_threshold=config.metrics.confusion_score_threshold,
-            iou_threshold=config.metrics.confusion_iou_threshold,
+            score_threshold=config.evaluate_config.confusion_score_threshold,
+            iou_threshold=config.evaluate_config.confusion_iou_threshold,
         )
 
     def forward(self, samples):
@@ -58,15 +59,29 @@ class LitHAODDETR(pl.LightningModule):
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         """Trainer 在 step 之前调用，将自定义批次移动到当前设备。
 
-        本项目 batch 为 (NestedTensor, targets)，targets 是每张图的标注字典。
-        NestedTensor 不是普通 Tensor，因此显式调用它的 to(device)；标注字段
-        也逐个转移。dataloader_idx 用于区分多个 DataLoader，这里只有一个。
+        原图始终留在 CPU。训练和验证需要把标注移到模型设备，
+        预测时会在 CPU 上解码检测框，因此空标注也留在 CPU。
         """
-        samples, targets = batch
-        return samples.to(device), [
-            {key: value.to(device) for key, value in target.items()}
-            for target in targets
-        ]
+        samples, targets, *originals = batch
+        if self._trainer is None or not self._trainer.predicting:
+            targets = [
+                {key: value.to(device) for key, value in target.items()}
+                for target in targets
+            ]
+        return samples.to(device), targets, *originals
+
+    def predict_step(
+        self, batch: DetectionBatch, batch_idx: int
+    ) -> list[dict[str, torch.Tensor]]:
+        """对一批本地图像做前向推理，解码后交给逐批保存回调。"""
+        samples, empty_targets, _ = batch
+        predictions, _ = prepare_detection_inputs(
+            samples,
+            empty_targets,
+            self(samples),
+            max_detections=self.config.predict_config.max_detections,
+        )
+        return predictions
 
     def weighted_loss(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
         """主输出、辅助层及 encoder 损失使用各自基础名称对应的权重。"""
@@ -84,7 +99,7 @@ class LitHAODDETR(pl.LightningModule):
 
     def _step(self, batch, stage: str):
         """训练与验证共用的单批次计算；是否求梯度由 Trainer 管理。"""
-        samples, targets = batch
+        samples, targets = batch[:2]
         outputs = self.model(samples)
         losses = self.criterion(outputs, targets)
         total = self.weighted_loss(losses)
@@ -124,6 +139,7 @@ class LitHAODDETR(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         """Trainer 在验证阶段逐批调用；Lightning 负责切换评估模式并禁用梯度。"""
         _, outputs = self._step(batch, "val")
+        options = self.config.evaluate_config
         if not self.trainer.sanity_checking:
             # 所有验证批次都参与指标计算；预检不加入正式验证结果。
             # 验证时 outputs["pred_logits"]：[B, Q, C]，outputs["pred_boxes"]：[B, Q, 4]；
@@ -132,7 +148,7 @@ class LitHAODDETR(pl.LightningModule):
                 batch[0],
                 batch[1],
                 outputs,
-                max_detections=self.config.metrics.max_detections,
+                max_detections=options.max_detections,
             )
             self.val_map.update(predictions, targets)
             self.val_confusion.update(predictions, targets)
@@ -143,13 +159,12 @@ class LitHAODDETR(pl.LightningModule):
             and self.trainer.is_global_zero
             and not self.trainer.sanity_checking
         ):
-            options = self.config.swanlab
             images = detection_previews(
                 batch[0],
                 batch[1],
                 outputs,
-                score_threshold=options.score_threshold,
-                max_predictions=options.max_predictions,
+                score_threshold=options.preview_score_threshold,
+                max_predictions=options.preview_max_predictions,
             )
             # log_image 是当前 SwanLab logger 的接口；global_step 是优化器更新步数。
             self.logger.log_image(
@@ -192,8 +207,8 @@ class LitHAODDETR(pl.LightningModule):
                     images=[
                         draw_confusion_matrix(
                             matrix,
-                            score_threshold=self.config.metrics.confusion_score_threshold,
-                            iou_threshold=self.config.metrics.confusion_iou_threshold,
+                            score_threshold=self.config.evaluate_config.confusion_score_threshold,
+                            iou_threshold=self.config.evaluate_config.confusion_iou_threshold,
                         )
                     ],
                     step=self.global_step,

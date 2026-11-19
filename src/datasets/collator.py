@@ -2,12 +2,12 @@ from collections.abc import Sequence
 import torch
 
 from .transforms import AlbTransform
-from .types import RAODSample, RAODBatch
+from .types import DataSample, DetectionBatch
 from src.utils.tensors import NestedTensor
 
 
-class RAODCollate:
-    """同步转换样本并补边，按 RAODBatch 的字段组装模型输入。
+class Collator:
+    """同步转换样本并补边，返回模型输入、张量标注和原始样本。
 
     同一批共享缩放长边；验证或关闭多尺度时使用 fix_scale_size。
     图片和框由 AlbTransform 同步转换，框和类别按图片保留为变长列表。
@@ -41,16 +41,15 @@ class RAODCollate:
             for size in sizes
         }
 
-    def __call__(
-        self, batch: list[RAODSample]
-    ) -> tuple[NestedTensor, list[dict[str, torch.Tensor]]]:
+    def __call__(self, batch: list[DataSample]) -> DetectionBatch:
         if not batch:
             raise ValueError("batch 不能为空")
         if any(len(sample["boxes"]) != len(sample["labels"]) for sample in batch):
             raise ValueError("每张图片的 boxes 和 labels 必须一一对应")
 
+        sources = batch
         transform = self.transforms[self.get_scale_size()]
-        results = [transform(sample["image"], sample["boxes"]) for sample in batch]
+        results = [transform(sample["image"], sample["boxes"]) for sample in sources]
         # 单张图片为 [C, H, W]。等比例缩放只统一最长边，另一条边仍可能不同，
         # 因此分别取批次最大高、最大宽，确定能容纳所有图片的公共画布。
         images = [result["image"] for result in results]
@@ -109,13 +108,13 @@ class RAODCollate:
                 "labels": torch.tensor(sample["labels"], dtype=torch.int64),
                 "boxes": results[i]["boxes"],
             }
-            for i, sample in enumerate(batch)
+            for i, sample in enumerate(sources)
         ]  # list[ { 'labels': [num_objects], 'boxes': [num_objects, 4]} ]
 
         tensors = NestedTensor(
             pixel_values, padding_mask, no_padding  # (B, C, H, W)  # (B, H, W)
         )
-        return tensors, targets
+        return tensors, targets, sources
         # 检测框和类别数量可能不同，按图片保留变长列表，不强行堆叠。
         # return {
         #     "images": pixel_values,  # (B, C, H, W)

@@ -1,17 +1,24 @@
 import random
+from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
+from tempfile import mkdtemp
 
 import numpy as np
+import pytorch_lightning as pl
 import torch
 from loguru import logger
-from pathlib import Path
-import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from swanlab.integration.pytorch_lightning import SwanLabLogger
+from torch.utils.data import DataLoader
+
 from src.config import SwanLabConfig, load_config
+from src.datasets.collator import Collator
+from src.datasets.raod_benchmark import CLASS_NAMES
 from src.trainer.lightning_data_module import LitHAODDETRDataModule
-from src.utils.logger import setup_logging
 from src.trainer.lightning_module import LitHAODDETR
+from src.trainer.prediction import ImagePredictionWriter, PredictionImageDataset
+from src.utils.logger import setup_logging
 
 
 class SwanLabLightningLogger(SwanLabLogger, pl.loggers.Logger):
@@ -38,8 +45,8 @@ class Engine:
         self.random_seed(self.config.seed)
         logger.info("配置加载完成：{}", self.config)
 
-    def _checkpoint_path(self) -> str:
-        return str(self.outputs / "checkpoints" / "last.ckpt")
+    def _checkpoint_path(self, filename: str) -> str:
+        return str(self.outputs / "checkpoints" / filename)
 
     def _experiment(self, config: SwanLabConfig):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -56,7 +63,7 @@ class Engine:
     def train(self):
         config = self.config.train_config
         settings = self.config.swanlab
-        checkpoint_path = self._checkpoint_path() if config.resume else None
+        checkpoint_path = self._checkpoint_path("last.ckpt") if config.resume else None
         if checkpoint_path and not Path(checkpoint_path).is_file():
             raise FileNotFoundError(f"恢复训练的检查点不存在：{checkpoint_path}")
         # Lightning 统一设置随机源；workers=True 还会为 DataLoader worker 配置种子。
@@ -70,15 +77,24 @@ class Engine:
             # 记录实验配置；后续 self.log 指标通过同一个 logger 写入 SwanLab。
             experiment.log_hyperparams(self.config.model_dump(mode="json"))
             # Callback 是 Trainer 在训练/验证等阶段调用的扩展对象。
-            # 根据每轮 val_loss 选择最小值的检查点，并额外保存最近一次 last.ckpt。
-            checkpoint = ModelCheckpoint(
+            # 每轮验证结束后按 mAP@0.5:0.95 选出 best.ckpt。
+            best_checkpoint = ModelCheckpoint(
                 dirpath=self.outputs / "checkpoints",
-                filename="epoch={epoch:03d}-step={step}",
-                auto_insert_metric_name=False,
-                monitor="val_loss",
-                mode="min",
+                filename="best",
+                monitor="val_map",
+                mode="max",
                 save_top_k=1,
-                save_last=True,
+                save_on_train_epoch_end=False,
+                enable_version_counter=False,
+            )
+            # 单独保存每轮的 last.ckpt，因为 mAP 未刷新时最佳回调可能跳过保存。
+            # 放在最佳回调之后，让续训文件包含最新的最佳指标和检查点路径。
+            last_checkpoint = ModelCheckpoint(
+                dirpath=self.outputs / "checkpoints",
+                filename="last",
+                save_top_k=1,
+                save_on_train_epoch_end=False,
+                enable_version_counter=False,
             )
             # max_epochs 为训练总轮数；auto 自动选择可用设备，devices=1 使用单设备。
             # 32-true 使用 float32；LearningRateMonitor 按 step 记录优化器学习率。
@@ -89,7 +105,11 @@ class Engine:
                 devices=1,
                 precision="32-true",
                 logger=experiment,
-                callbacks=[checkpoint, LearningRateMonitor(logging_interval="step")],
+                callbacks=[
+                    best_checkpoint,
+                    last_checkpoint,
+                    LearningRateMonitor(logging_interval="step"),
+                ],
                 log_every_n_steps=10,
                 default_root_dir=self.outputs,
             )
@@ -114,10 +134,9 @@ class Engine:
             experiment.experiment.finish()
 
     def eval(self):
-        checkpoint = self._checkpoint_path()
-        if not checkpoint or not Path(checkpoint).is_file():
-            raise FileNotFoundError(f"验证检查点不存在：{checkpoint}")
-        config = self.config.train_config
+        checkpoint = self._checkpoint_path("best.ckpt")
+        if not Path(checkpoint).is_file():
+            raise FileNotFoundError(f"最佳验证检查点不存在：{checkpoint}")
         settings = self.config.swanlab
         pl.seed_everything(self.config.seed, workers=True)
         datamodule = LitHAODDETRDataModule(self.config)
@@ -142,6 +161,82 @@ class Engine:
             return results
         finally:
             experiment.experiment.finish()
+
+    def predict(
+        self,
+        images: Sequence[str | Path],
+        *,
+        batch_size: int | None = None,
+        score_threshold: float | None = None,
+    ) -> list[Path]:
+        """使用最佳检查点预测本地图片，按输入顺序返回预览路径。"""
+        if not images:
+            raise ValueError("至少需要一张预测图片")
+        options = self.config.predict_config
+        if batch_size is None:
+            batch_size = options.batch_size
+        if score_threshold is None:
+            score_threshold = options.score_threshold
+        if batch_size < 1:
+            raise ValueError("预测批次大小必须为正整数")
+        if not 0 <= score_threshold <= 1:
+            raise ValueError("预测置信度阈值必须在 [0, 1] 内")
+
+        checkpoint = Path(self._checkpoint_path("best.ckpt"))
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"最佳预测检查点不存在：{checkpoint}")
+        if len(CLASS_NAMES) != self.config.model.num_classes:
+            raise ValueError("RAOD 类别名称数量与模型配置的 num_classes 不一致")
+
+        sources = [Path(image).expanduser().absolute() for image in images]
+        for source in sources:
+            if not source.is_file():
+                raise FileNotFoundError(f"预测图片不存在：{source}")
+
+        collate = Collator(
+            train=False,
+            multi_scale=False,
+            fix_scale_size=self.config.train_config.fix_scale_size,
+            patch_size=self.config.model.patch_size,
+            seed=self.config.seed,
+        )
+        loader = DataLoader(
+            PredictionImageDataset(sources),
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate,
+        )
+        task = LitHAODDETR(self.config)
+        task.strict_loading = True
+        prediction_dir = self.outputs / "predictions"
+        prediction_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(mkdtemp(prefix="run-", dir=prediction_dir))
+
+        writer = ImagePredictionWriter(
+            run_dir,
+            sources=sources,
+            class_names=CLASS_NAMES,
+            score_threshold=score_threshold,
+        )
+        trainer = pl.Trainer(
+            accelerator="auto",
+            devices=1,
+            precision="32-true",
+            inference_mode=True,
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=False,
+            callbacks=[writer],
+            default_root_dir=self.outputs,
+        )
+        trainer.predict(
+            task,
+            dataloaders=loader,
+            ckpt_path=checkpoint,
+            weights_only=True,
+            return_predictions=False,
+        )
+        return writer.saved_paths
 
     def random_seed(self, seed: int = 42) -> None:
         """固定全局随机源；在创建模型、DataLoader 和执行随机操作之前调用。

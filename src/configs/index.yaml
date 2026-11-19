@@ -1,6 +1,7 @@
 seed: 42 # 随机种子
 model_config: haod_detr_base.yaml # 模型配置文件，相对于本文件所在目录。
 train_config:
+  dataset: raod_small # raod_small 使用 80/20 划分；raod 使用完整数据的官方 train/test。
   batch_size: 2
   epochs: 60
   num_workers: 4
@@ -26,10 +27,16 @@ train_config:
   cost_bbox: 5.0 # bbox代价权重
   cost_giou: 2.0 # giou代价权重
   focal_alpha: 0.25 # 计算损失代价时 focal loss 的类别平衡权重
-metrics:
-  max_detections: 100 # 每张图片参与评估的最高分预测数；mAP 不使用置信度阈值过滤。
+evaluate_config:
+  max_detections: 100 # 每张图片送入检测指标的最高分候选框数量，mAP 不按置信度阈值过滤。
   confusion_score_threshold: 0.3 # 混淆矩阵使用的预测置信度阈值。
   confusion_iou_threshold: 0.5 # 混淆矩阵一对一匹配的 IoU 阈值。
+  preview_score_threshold: 0.3 # 验证预览中绘制预测框的最低置信度。
+  preview_max_predictions: 20 # 每张验证预览图最多绘制的预测框数量。
+predict_config:
+  batch_size: 1 # 预测时输入多张图片时，每批处理的图片数量。
+  max_detections: 100 # 独立预测每张图保留的最高分候选框数量。
+  score_threshold: 0.3 # 独立预测绘制并保存检测框的最低置信度。
 logger:
   level: "INFO" # 终端最低级别。
   file_level: "DEBUG" # 文件保留更详细的调试信息。
@@ -47,5 +54,3 @@ logger:
 swanlab:
   project: highway-abandon-detect # SwanLab 项目名称，同一项目下可比较实验。
   experiment_name: "haod-detr-training" # 基础实验名称，启动时自动追加本地时间。
-  score_threshold: 0.3 # 预测图显示的最低置信度，范围为 0 到 1。
-  max_predictions: 20 # 每张验证图片最多显示的预测框数量。

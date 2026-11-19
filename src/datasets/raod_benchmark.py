@@ -33,7 +33,7 @@ from datasets import (
 )
 from loguru import logger
 
-from src.config import AppConfig
+from src.config import RAODDatasetName
 
 
 CATEGORY = "spill"
@@ -134,11 +134,11 @@ def gen(
         }
 
 
-def process_raod_benchmark():
-
+def process_raod_benchmark(dataset: RAODDatasetName | None = None) -> None:
+    """准备指定数据集的缓存；直接运行本模块时准备两套缓存。"""
     routes = raod_path_routes()
-
-    logger.info("开始生成 RAOD 缓存，输出目录：{}", routes["raod"])
+    prepare_small = dataset in (None, "raod_small")
+    prepare_full = dataset in (None, "raod")
 
     features = Features(
         {
@@ -155,11 +155,11 @@ def process_raod_benchmark():
     #    （缓存文件名由参数 hash 得到，如 cache/generator-xxxx/xxx.arrow）。
     #    作用：再次以相同参数调用 from_generator 时命中缓存、跳过重新解析 xml。
     #    注意：这只是"过程缓存"，是 hash 命名的临时文件，不是可直接交付的成品数据集。
-    if is_dataset_cached(routes["raod_small"]):
+    if prepare_small and is_dataset_cached(routes["raod_small"]):
         logger.info(
             "RAOD benchmark small 缓存已存在，跳过处理：{}", routes["raod_small"]
         )
-    else:
+    elif prepare_small:
         ds = Dataset.from_generator(
             partial(gen, routes["small_train"], routes["small_labels"]),
             features=features,
@@ -181,9 +181,9 @@ def process_raod_benchmark():
             routes["raod_small"],
         )
 
-    if is_dataset_cached(routes["raod"]):
+    if prepare_full and is_dataset_cached(routes["raod"]):
         logger.info("RAOD benchmark 缓存已存在，跳过处理：{}", routes["raod"])
-    else:
+    elif prepare_full:
         train_ds = Dataset.from_generator(
             generator=partial(gen, routes["train"], routes["train_labels"]),
             features=features,
@@ -196,10 +196,8 @@ def process_raod_benchmark():
             cache_dir=str(routes["cache"]),
         )
 
-        dict = DatasetDict({"train": train_ds, "test": test_ds})
-        dict.save_to_disk(
-            routes["raod"], max_shard_size=500
-        )  # 数据集分片的最大大小: 500MB
+        dataset_dict = DatasetDict({"train": train_ds, "test": test_ds})
+        dataset_dict.save_to_disk(routes["raod"], max_shard_size="500MB")
         logger.success(
             "RAOD benchmark 缓存已保存：训练 {} 条，测试 {} 条",
             len(train_ds),

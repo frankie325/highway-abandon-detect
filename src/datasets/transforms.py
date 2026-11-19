@@ -179,7 +179,7 @@ def batch_tensor_to_images(
 ) -> list[Image.Image] | Image.Image:
     """还原 [B, 3, H, W] 批次，默认返回 B 张带框 PIL 图片。
 
-    boxes 接收 RAODBatch 的变长列表（每张 [N_i, 4]），或固定框数的 [B, N, 4] 张量。
+    boxes 接收变长列表（每张 [N_i, 4]），或固定框数的 [B, N, 4] 张量。
     padding_masks 为 bool [B, H, W]；补边不会被裁掉，标记方式与单图方法一致。
     concat=True 时返回一张按 columns 列拼接的图片，包含样本索引和补边占比。
     拼图间隔为 gap 像素；拼图不再次缩放图片，边界框位置保持一致。
@@ -320,7 +320,7 @@ if __name__ == "__main__":
     expected[:, [0, 2]] = width - expected[:, [2, 0]]
     torch.testing.assert_close(results["train"]["boxes"], expected, rtol=0, atol=1e-3)
 
-    from src.datasets.collate import RAODCollate
+    from src.datasets.collator import Collator
 
     # 选择宽高比差异最大的两张图片，再补足四张，确保能直观看到批次补边。
     ratios = [
@@ -337,20 +337,20 @@ if __name__ == "__main__":
             indices.append(index)
     samples = [dataset[index] for index in indices]
     for mode, is_train in (("train", True), ("val", False)):
-        collate = RAODCollate(
+        collate = Collator(
             train=is_train,
             multi_scale=False,
             fix_scale_size=scale_size,
             patch_size=config.model.patch_size,
             seed=config.seed,
         )
-        batch = collate(samples)
+        batch, targets, _ = collate(samples)
         # 原样拼图保留反归一化后的真实补边颜色，标记版叠加紫色显示补边范围。
         for highlight in (False, True):
             grid = batch_tensor_to_images(
-                batch["images"],
-                batch["boxes"],
-                padding_masks=batch["padding_masks"],
+                batch.tensors,
+                [target["boxes"] for target in targets],
+                padding_masks=batch.mask,
                 highlight_padding=highlight,
                 concat=True,
                 columns=2,
@@ -363,7 +363,7 @@ if __name__ == "__main__":
         logger.info(
             "{} 批次预览：images={}，原始样本索引={}",
             mode,
-            tuple(batch["images"].shape),
+            tuple(batch.tensors.shape),
             indices,
         )
     logger.success("检查通过，原图、训练和验证的带框预览已保存到：{}", output_dir)

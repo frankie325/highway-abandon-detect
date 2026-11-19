@@ -4,12 +4,12 @@ from datasets import Dataset
 from functools import partial
 from typing import Any
 
-from .collate import RAODCollate
+from .collator import Collator
 from .raod_benchmark import load_raod_small, load_raod
 from src.config import AppConfig
 
 
-def seed_raod_worker(worker_id: int, *, collator: RAODCollate) -> None:
+def seed_raod_worker(worker_id: int, *, collator: Collator) -> None:
     """让每个 worker 的 Albumentations 独立随机且可复现。"""
     seed = torch.initial_seed() % (2**32)
     for index, transform in enumerate(collator.transforms.values()):
@@ -20,7 +20,7 @@ def build_dataloader(config: AppConfig, train: bool) -> DataLoader[Any]:
     train_config = config.train_config
     model_config = config.model
 
-    collator = RAODCollate(
+    collator = Collator(
         train=train,
         multi_scale=train_config.multi_scale,
         scale_sizes=train_config.scale_sizes,
@@ -29,8 +29,9 @@ def build_dataloader(config: AppConfig, train: bool) -> DataLoader[Any]:
         seed=config.seed,
     )
 
-    dataset: Dataset = load_raod_small(train)
-    # collator = build_collator(train, config, patch_size=patch_size, seed=seed)
+    load_dataset = load_raod if train_config.dataset == "raod" else load_raod_small
+    dataset: Dataset = load_dataset(train)
+
     return DataLoader(
         dataset,
         batch_size=train_config.batch_size,

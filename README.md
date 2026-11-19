@@ -67,11 +67,11 @@ uv run python train.py
 
 检查点会保存优化器和调度器进度。断点续训应使用相同的调度器类型、训练总轮数、数据及调度参数；改变这些设置可能改变曲线或与旧状态不兼容。加入调度器之前保存的旧检查点没有调度器状态，无法直接作为完整断点恢复；需要从头训练或另行进行权重迁移。
 
-SwanLab 项目、实验名和验证图选项在总配置的 `swanlab` 节点设置。每次启动时，程序会在基础实验名后追加本地时间，例如 `haod-detr-training-2026-11-16_14-30-00-123456`。登录凭据由 `uv run swanlab login` 管理，不写入配置文件。项目不再加载 `.env` 文件或读取 SwanLab 配置环境变量。
+SwanLab 项目和实验名在总配置的 `swanlab` 节点设置。每次启动时，程序会在基础实验名后追加本地时间，例如 `haod-detr-training-2026-11-16_14-30-00-123456`。登录凭据由 `uv run swanlab login` 管理，不写入配置文件。项目不再加载 `.env` 文件或读取 SwanLab 配置环境变量。
 
-每轮正式验证时，SwanLab 的 `val/predictions` 会保存首个验证批次中每张图片的预览。图片中绿色为真实框、红色为预测框、紫色为 padding；即使没有预测框达到阈值，图片也会保留。验证同时记录总损失和各最终层损失。检查点保存在 `outputs/checkpoints/`，包含最近一次和验证损失最低的模型。当前验证损失并非 mAP，不能单独证明检测精度。
+每轮正式验证时，SwanLab 的 `val/predictions` 会保存首个验证批次中每张图片的预览。图片中绿色为真实框、红色为预测框、紫色为 padding；即使没有预测框达到阈值，图片也会保留。验证同时记录总损失和各最终层损失。
 
-验证还会在整个验证集上计算 `val_map`（mAP@0.5:0.95）、`val_map_50` 和 `val_map_75`，并向 SwanLab 记录 `val/pr_curve` 与 `val/confusion_matrix`。PR 曲线采用 IoU=0.5 和 COCO 的 101 个召回率采样点；mAP 使用每张图最高分的 `metrics.max_detections` 个预测，不做置信度阈值过滤。混淆矩阵的置信度和 IoU 阈值由 `metrics` 配置，默认分别为 0.3 和 0.5；预测按分数排序并与真实框按 IoU 一对一匹配，行是真实类别、列是预测类别，背景行表示误检、背景列表示漏检，背景/背景不计真负例。
+验证还会在整个验证集上计算 `val_map`（mAP@0.5:0.95）、`val_map_50` 和 `val_map_75`，并向 SwanLab 记录 `val/pr_curve` 与 `val/confusion_matrix`。PR 曲线采用 IoU=0.5 和 COCO 的 101 个召回率采样点；mAP 使用每张图最高分的 `evaluate_config.max_detections` 个预测，不做置信度阈值过滤。混淆矩阵的置信度和 IoU 阈值由 `evaluate_config` 配置，默认分别为 0.3 和 0.5；预测按分数排序并与真实框按 IoU 一对一匹配，行是真实类别、列是预测类别，背景行表示误检、背景列表示漏检，背景/背景不计真负例。 验证预览单独使用 `preview_score_threshold` 和 `preview_max_predictions`。
 
 评估框坐标基于缩放后图片的有效区域，排除 padding；当前管线不保留原图面积和 crowd 标注。验证集中没有可评估真实目标时，COCO 指标可能为 `-1`，表示不可用而非负准确率。图表由 SwanLab 保存到输出目录内的实验媒体目录。
 
@@ -80,8 +80,11 @@ SwanLab 项目、实验名和验证图选项在总配置的 `swanlab` 节点设�
 ```text
 logs/                 # Loguru 的时间命名日志文件
 outputs/
-├── checkpoints/      # 最近一次和验证损失最低的检查点
-└── swanlab/          # SwanLab 本地实验数据和媒体文件
+├── checkpoints/
+│   ├── best.ckpt     # val_map 最高的检查点，用于独立验证
+│   └── last.ckpt     # 最近一次检查点，用于断点续训
+├── swanlab/          # SwanLab 本地实验数据和媒体文件
+└── predictions/      # 每次预测单独保存一组原图预览
 ```
 
 `outputs/` 不纳入 Git；已有旧目录不会自动迁移。日志目录可在配置中调整，`--outputs` 可指定检查点和 SwanLab 的输出目录。
@@ -95,18 +98,36 @@ uv run python train.py --optimizer SGD --momentum 0.9 --weight-decay 0.0001
 uv run python train.py --lr-scheduler step
 # 从 outputs/checkpoints/last.ckpt 恢复训练。
 uv run python train.py --resume
-# 使用指定输出目录，验证其中的 checkpoints/last.ckpt。
+# 使用指定输出目录，验证其中的 checkpoints/best.ckpt。
 uv run python eval.py --outputs outputs
 # 查看所有参数；两者均支持 --batch-size、--num-workers 和 --seed。
 uv run python train.py --help
 uv run python eval.py --help
 ```
 
-`--outputs` 的相对路径以项目根目录为基准，默认是 `outputs`。在 YAML 中设置 `train_config.resume: true` 或传入 `--resume` 时，从输出目录下的 `checkpoints/last.ckpt` 恢复；默认从头训练。验证需要提供与训练时模型结构一致的配置。
+`--outputs` 的相对路径以项目根目录为基准，默认是 `outputs`。在 YAML 中设置 `train_config.resume: true` 或传入 `--resume` 时，从输出目录下的 `checkpoints/last.ckpt` 恢复；默认从头训练。独立验证读取 `checkpoints/best.ckpt`，需要提供与训练时模型结构一致的配置。旧实验按 `val_loss` 选出的检查点需要重新评估，才能按 `val_map` 比较。
+
+训练和验证的数据集由总配置中的 `train_config.dataset` 指定。默认的 `raod_small` 使用固定种子的 80/20 训练和验证划分。选择 `raod` 时，训练使用完整数据集的官方 `train`，验证使用官方 `test`。命令行可以覆盖 YAML，例如：
+
+```bash
+uv run python train.py --dataset raod --outputs outputs/raod
+uv run python eval.py --dataset raod --outputs outputs/raod
+```
+
+## 图片预测
+
+```bash
+uv run python predict.py road.jpg
+uv run python predict.py road1.jpg road2.png --outputs outputs/run1 --batch-size 2 --score-threshold 0.4
+```
+
+图片路径相对于当前工作目录。`--outputs` 沿用训练的路径规则，预测加载其中的 `checkpoints/best.ckpt`，模型结构须与训练时一致。`predict_config` 设置独立预测的批次大小、最高分候选框数量和置信度阈值，默认分别为 `1`、`100` 和 `0.3`。`--batch-size` 和 `--score-threshold` 可覆盖 YAML。预测复用验证时的图像预处理，无需 RAOD 数据集或 SwanLab 登录。
+
+Lightning 的 `Trainer.predict()` 按批运行推理，每批完成后保存结果。每次运行在 `predictions/` 下创建独立的 `run-*` 目录，按输入顺序保存 `0001_road.png` 等文件。预测框还原到原图坐标，并标注类别和置信度，例如 `spill 0.92`。没有检测结果的图片也会保存。
 
 ## 数据集图像变换策略
 
-当前使用 Albumentations 处理单张图片及边界框，由 `RAODCollate` 为批次选择缩放尺寸、完成补边并生成掩码。处理流程为：
+当前使用 Albumentations 处理单张图片及边界框，由 `Collator` 选择缩放尺寸、完成补边并生成掩码，同时保留原始样本。处理流程为：
 
 ```text
 PIL 图片转 RGB → 等比例缩放 → 训练时随机增强 → 归一化 → CHW 张量 → 批次右下补边
@@ -169,4 +190,4 @@ RGB 像素使用 ImageNet 参数归一化，即 `(pixel / 255 - mean) / std`：
 | `targets[i]["boxes"]` | `float32 [N_i, 4]` | 第 i 张图的归一化 `cxcywh` 框 |
 | `targets[i]["labels"]` | `int64 [N_i]` | 与边界框顺序一致的类别编号 |
 
-实现位置：[单图转换 AlbTransform](src/datasets/transforms.py)、[批次组装 RAODCollate](src/datasets/collate.py)、[批次类型 RAODBatch](src/datasets/types.py)。`transforms.py` 的预览测试会将增强概率临时设为 `1`，便于观察效果；实际数据加载使用上表中的默认概率。
+实现位置：[单图转换 AlbTransform](src/datasets/transforms.py)、[批次组装 Collator](src/datasets/collator.py)、[批次类型 DetectionBatch](src/datasets/types.py)。`transforms.py` 的预览测试会将增强概率临时设为 `1`，便于观察效果；实际数据加载使用上表中的默认概率。
