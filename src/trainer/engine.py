@@ -95,13 +95,13 @@ class Engine:
                 enable_version_counter=False,
             )
             # max_epochs 为训练总轮数；auto 自动选择可用设备，devices=1 使用单设备。
-            # 32-true 使用 float32；LearningRateMonitor 按 step 记录优化器学习率。
+            # precision 由 train_config 设置。LearningRateMonitor 按 step 记录学习率。
             # log_every_n_steps 控制训练步骤日志写入 logger 的频率。
             trainer = pl.Trainer(
                 max_epochs=config.epochs,
                 accelerator="auto",
                 devices=1,
-                precision="32-true",
+                precision=config.precision,
                 logger=experiment,
                 callbacks=[
                     best_checkpoint,

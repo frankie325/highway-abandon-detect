@@ -41,6 +41,11 @@ def build_parser(*, mode: ScriptMode) -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, help="随机种子")
     if mode == "train":
         parser.add_argument("--epochs", type=int, help="训练总轮数")
+        parser.add_argument(
+            "--precision",
+            choices=("32-true", "bf16-mixed", "16-mixed"),
+            help="训练精度，默认读取 train_config.precision",
+        )
         parser.add_argument("--lr", type=float, help="优化器学习率")
         parser.add_argument(
             "--lr-scheduler",
@@ -94,6 +99,7 @@ def config_overrides(
     if mode == "train":
         sections["train_config"] += (
             "epochs",
+            "precision",
             "lr",
             "optimizer",
             "momentum",

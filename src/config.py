@@ -50,6 +50,7 @@ class TrainConfig(_ConfigModel):
     batch_size: int = Field(gt=0)
     epochs: int = Field(gt=0)
     num_workers: int = Field(ge=0)
+    precision: Literal["32-true", "bf16-mixed", "16-mixed"] = "32-true"
     lr: float = Field(gt=0, allow_inf_nan=False)
     lr_encoder: float = Field(default=0.00015, gt=0, allow_inf_nan=False)
     lr_vit_layer_decay: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False)

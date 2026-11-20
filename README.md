@@ -79,6 +79,8 @@ uv run swanlab login
 uv run python train.py
 # 覆盖批次大小、轮数和学习率
 uv run python train.py --batch-size 2 --epochs 100 --lr 0.001
+# 使用 BF16 混合精度训练
+uv run python train.py --precision bf16-mixed
 # 使用 SGD 和动量
 uv run python train.py --optimizer SGD --momentum 0.9 --weight-decay 0.0001
 # 使用按轮衰减的 StepLR
@@ -90,6 +92,8 @@ uv run python train.py --resume
 ```
 
 训练和验证共用 `train_config.dataset`。默认的 `raod_small` 使用固定种子的 80/20 划分。完整 `raod` 使用官方 `train` 训练，使用官方 `test` 验证。
+
+训练精度读取 YAML 的 `train_config.precision`，可用 `--precision` 覆盖。可选 `32-true`（FP32）、`bf16-mixed`（BF16 混合精度）和 `16-mixed`（FP16 混合精度）。该设置也用于训练过程中的验证。
 
 续训时指定原来的 `--outputs` 和训练配置。`--resume` 或 YAML 中的 `train_config.resume: true` 会读取对应目录下的 `checkpoints/last.ckpt`。
 

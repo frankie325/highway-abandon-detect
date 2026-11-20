@@ -6,6 +6,7 @@ train_config:
   batch_size: 2
   epochs: 60
   num_workers: 4
+  precision: "bf16-mixed" # 训练精度。32-true 为 FP32，bf16-mixed 和 16-mixed 分别为 BF16 和 FP16 混合精度。
   lr: 0.0001 # 基础学习率
   lr_encoder: 0.00015 # DINOv3 编码器的基础学习率；冻结时不参与优化。
   lr_vit_layer_decay: 0.8 # DINOv3 层间衰减系数，越靠前的层学习率越小。
