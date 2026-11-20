@@ -102,6 +102,7 @@ class EvaluateConfig(_ConfigModel):
 class PredictConfig(_ConfigModel):
     """独立图片预测参数。"""
 
+    images: list[str] = Field(default_factory=list)
     batch_size: int = Field(default=1, gt=0)
     max_detections: int = Field(default=100, gt=0)
     score_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
@@ -166,6 +167,7 @@ class AppConfig(_ConfigModel):
 
     # 运行目录默认指向项目根目录
     root: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent)
+    outputs: str = Field(default="outputs", min_length=1)
     seed: int = Field(lt=2**32)  # 随机种子
     model: ModelConfig
     train_config: TrainConfig

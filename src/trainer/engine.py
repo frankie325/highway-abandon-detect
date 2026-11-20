@@ -30,13 +30,11 @@ class SwanLabLightningLogger(SwanLabLogger, pl.loggers.Logger):
 
 
 class Engine:
-    def __init__(
-        self, args: dict[str, object] | None = None, *, outputs: str | Path = "outputs"
-    ):
+    def __init__(self, args: dict[str, object] | None = None):
         config = load_config(overrides=args)
         # 每次启动都在基础实验名后追加本地时间，避免同名实验难以区分。
         self.config = config
-        output_path = Path(outputs).expanduser()
+        output_path = Path(config.outputs).expanduser()
         self.outputs = (
             output_path if output_path.is_absolute() else config.root / output_path
         ).resolve()
@@ -164,15 +162,17 @@ class Engine:
 
     def predict(
         self,
-        images: Sequence[str | Path],
+        images: Sequence[str | Path] | None = None,
         *,
         batch_size: int | None = None,
         score_threshold: float | None = None,
     ) -> list[Path]:
         """使用最佳检查点预测本地图片，按输入顺序返回预览路径。"""
+        options = self.config.predict_config
+        if images is None:
+            images = options.images
         if not images:
             raise ValueError("至少需要一张预测图片")
-        options = self.config.predict_config
         if batch_size is None:
             batch_size = options.batch_size
         if score_threshold is None:
