@@ -29,11 +29,27 @@
 
 ### 登陆Hugging Face
 
+在可以直连 Hugging Face 的环境，直接登录：
+
 ```bash
 uv run hf auth login
 # 旧版本 huggingface_hub 使用：
 uv run huggingface-cli login
 ```
+
+国内服务器（如 AutoDL 容器）通常无法访问 `huggingface.co`，浏览器登录和粘贴 token 都会在验证时提示 `Cannot assign requested address` 或超时。此时改用国内镜像 `hf-mirror.com`：
+
+```bash
+# 仅当前终端生效
+export HF_ENDPOINT=https://hf-mirror.com
+uv run hf auth login
+
+# 如需长期生效，可写入 shell 配置
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc
+source ~/.bashrc
+```
+
+只需下载公开模型时无需登录；登录主要用于获取下面受控模型的访问权限。
 
 ### Hugging Face 模型授权
 
