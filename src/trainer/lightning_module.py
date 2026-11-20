@@ -136,6 +136,19 @@ class LitHAODDETR(pl.LightningModule):
         total, _ = self._step(batch, "train")
         return total
 
+    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        """记录当前优化器的全局梯度 L2 范数。"""
+        # 此时梯度已累积并还原 AMP 缩放，Lightning 随后才执行裁剪。
+        gradients = [
+            param.grad
+            for group in optimizer.param_groups
+            for param in group["params"]
+            if param.grad is not None
+        ]
+        if gradients:
+            total_norm = torch.nn.utils.get_total_norm(gradients, norm_type=2.0)
+            self.log("train/grad_norm", total_norm, on_step=True, on_epoch=False)
+
     def validation_step(self, batch, batch_idx):
         """Trainer 在验证阶段逐批调用；Lightning 负责切换评估模式并禁用梯度。"""
         _, outputs = self._step(batch, "val")

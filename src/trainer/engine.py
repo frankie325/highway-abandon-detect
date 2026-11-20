@@ -102,6 +102,8 @@ class Engine:
                 accelerator="auto",
                 devices=1,
                 precision=config.precision,
+                gradient_clip_val=config.gradient_clip_val,
+                gradient_clip_algorithm=config.gradient_clip_algorithm,
                 logger=experiment,
                 callbacks=[
                     best_checkpoint,

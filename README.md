@@ -95,6 +95,8 @@ uv run python train.py --resume
 
 训练精度读取 YAML 的 `train_config.precision`，可用 `--precision` 覆盖。可选 `32-true`（FP32）、`bf16-mixed`（BF16 混合精度）和 `16-mixed`（FP16 混合精度）。该设置也用于训练过程中的验证。
 
+梯度裁剪的配置和计算示例见[梯度裁剪笔记](#梯度裁剪笔记)。
+
 续训时指定原来的 `--outputs` 和训练配置。`--resume` 或 YAML 中的 `train_config.resume: true` 会读取对应目录下的 `checkpoints/last.ckpt`。
 
 ### 独立验证
@@ -138,7 +140,7 @@ uv run python predict.py --help
 | 配置项            | 用途                                                                                                      |
 | ----------------- | --------------------------------------------------------------------------------------------------------- |
 | `seed`            | 随机种子                                                                                                  |
-| `outputs`         | 输出目录，默认是 `outputs/`                                                                             |
+| `outputs`         | 输出目录，默认是 `outputs/`                                                                               |
 | `model_config`    | 引用模型配置，默认是 [haod_detr_base.yaml](src/configs/haod_detr_base.yaml)，包含 DINOv3 权重和检测器结构 |
 | `train_config`    | 数据集、训练轮数、批次大小、优化器、学习率策略和续训                                                      |
 | `evaluate_config` | mAP 的候选框上限、混淆矩阵阈值和验证预览设置                                                              |
@@ -215,8 +217,47 @@ RGB 像素使用 ImageNet 参数归一化，即 `(pixel / 255 - mean) / std`：
 
 实现位置：[单图转换 AlbTransform](src/datasets/transforms.py)、[批次组装 Collator](src/datasets/collator.py)、[批次类型 DetectionBatch](src/datasets/types.py)。`transforms.py` 的预览测试会将增强概率临时设为 `1`，便于观察效果；实际数据加载使用上表中的默认概率。
 
+## 梯度裁剪
+
+梯度裁剪发生在反向传播之后、优化器更新参数之前，用来减少过大的梯度对参数更新的影响。HAODDETR 的默认配置使用全局 L2 范数裁剪，阈值为 `0.1`。 [项目配置](src/configs/index.yaml)
+
+```yaml
+train_config:
+  gradient_clip_val: 0.1
+  gradient_clip_algorithm: norm
+```
+
+`gradient_clip_val` 设置裁剪上限，`gradient_clip_algorithm` 决定上限作用在哪个量上。`norm` 是 Lightning 的默认裁剪方式。将 `gradient_clip_val` 设为 `0` 可以关闭裁剪。 [Lightning 梯度裁剪文档](https://lightning.ai/docs/pytorch/stable/reference/advanced/training_tricks#gradient-clipping)
+
+gradient_clip_algorithm可以设置为 `norm` 和 `value`
+
+- **`norm` 按全局 L2 范数裁剪**
+
+  把当前优化器中所有有梯度的参数的梯度看成一个长向量 `g`，记全局 L2 范数为 `N`，阈值为 `c > 0`。当 `N ≤ c` 时，梯度原样保留。当 `N > c` 时，每个梯度分量都乘以同一个系数 `c / N`，因此梯度方向保留，裁剪后的范数约等于 `c`。
+
+  以 `g = (3, 4)` 为例，原来的 L2 范数是 `5`。
+
+  | `gradient_clip_val` | 缩放比例  | 裁剪后的梯度   | 裁剪后的范数 |
+  | ------------------- | --------- | -------------- | ------------ |
+  | `1.0`               | `1.0 / 5` | `(0.6, 0.8)`   | `1.0`        |
+  | `0.1`               | `0.1 / 5` | `(0.06, 0.08)` | `0.1`        |
+
+  超过阈值时，**只除以 L2 范数相当于把阈值设为 `1.0`**。`c` 既决定多大的梯度会触发裁剪，也决定触发后缩到多大。
+
+- **`value` 按梯度分量裁剪**
+
+  把每个梯度分量分别限制在 `[-c, c]`。例如阈值是 `0.1` 时，`(0.03, -0.2, 0.5)` 会变成 `(0.03, -0.1, 0.1)`。此时阈值限制单个分量的绝对值，裁剪后的全局 L2 范数仍可能超过 `0.1`。
+
+### 混合精度 + 梯度裁剪
+
+开启混合精度后，梯度裁剪阈值仍然按原始梯度的尺度设置，用 `16-mixed` 时，Lightning 可以临时放大损失，以降低小梯度在 FP16 中下溢为零的风险。假设原始梯度范数是 `0.5`，缩放系数是 `1024`，反向传播得到的梯度范数会约为 `512`。Lightning 在裁剪前把梯度除以 `1024`，范数回到约 `0.5`，然后用阈值 `0.1` 把全局范数裁到约 `0.1`。[Lightning 梯度裁剪文档](https://lightning.ai/docs/pytorch/stable/reference/advanced/training_tricks#gradient-clipping)
+
+### 在 SwanLab 观察梯度并调整阈值
+
+项目在 `on_before_optimizer_step()` 里读取当前优化器的梯度。使用 FP16 梯度缩放时，到这个时点已经完成反缩放。Trainer 随后执行裁剪，因此 `train/grad_norm` 记录的是**裁剪前的全局 L2 范数**。例如记录值是 `2.0`，使用 `norm` 和阈值 `0.1` 时，优化器使用的梯度范数约为 `0.1`。该指标按优化器步计算，当前训练配置每 `10` 步向 SwanLab 写一次训练步骤指标。使用 `value` 时，要判断是否触发裁剪，应看梯度分量的最大绝对值。 [项目的梯度记录代码](src/trainer/lightning_module.py#L139) · [Lightning 钩子说明](https://api.lightning.ai/docs/pytorch/stable/_modules/lightning/pytorch/core/hooks.html#ModelHooks.on_before_optimizer_step)
+
+原版 DETR 把 `0.1` 作为默认阈值，可以用作 HAODDETR 的实验起点。若梯度范数通常在 `0.03–0.08`，偶尔跳到 `2.0`，`0.1` 主要压住尖峰。若大多数记录点都在 `0.5–2.0`，`0.1` 会频繁触发裁剪。可以用 `1.0` 做对照，结合训练损失和验证 mAP 判断。 [DETR 官方训练代码](https://github.com/facebookresearch/detr/blob/main/main.py)
+
 ## Todo
 
-resume时继续从上一次swanlab实验恢复  
-预测脚本输出目录名称修改  
-添加梯度裁剪
+项目待办和完成状态见 [TODO.md](TODO.md)。
