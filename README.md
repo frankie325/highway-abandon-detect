@@ -217,5 +217,6 @@ RGB 像素使用 ImageNet 参数归一化，即 `(pixel / 255 - mean) / std`：
 
 ## Todo
 
-resume时继续从上一次swanlab实验恢复
-预测脚本输出目录名称修改
+resume时继续从上一次swanlab实验恢复  
+预测脚本输出目录名称修改  
+添加梯度裁剪
