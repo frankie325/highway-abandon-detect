@@ -44,7 +44,7 @@ predict_config:
   score_threshold: 0.3 # 独立预测绘制并保存检测框的最低置信度。
 logger:
   level: "INFO" # 终端最低级别。
-  file_level: "DEBUG" # 文件保留更详细的调试信息。
+  file_level: "INFO" # 文件保留更详细的调试信息。
   console_enabled: true
   file_enabled: true
   log_dir: "logs" # 相对于项目根目录。
