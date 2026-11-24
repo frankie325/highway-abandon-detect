@@ -4,6 +4,52 @@
 
 ## 前置准备
 
+### 数据集
+
+本项目使用 RAOD（Road Abandoned Object Detection）基准数据集，来自 [UnicomBenchmark/RAODBench](https://github.com/frankie325/UnicomBenchmark/tree/main/RAODBench)。数据采集自真实高速视频监控场景，包含 557 段视频序列、18953 张图像，均带人工像素级标注。
+
+- 官方仓库：[https://github.com/frankie325/UnicomBenchmark/tree/main/RAODBench](https://github.com/frankie325/UnicomBenchmark/tree/main/RAODBench)
+- 数据下载：仓库 README 提供百度网盘 / Google Drive 链接，下载后按下列目录结构放入 `data/RAOD-benchmark/`。
+- 论文：Y. Xu, H. Hu, X. Zhu, Y. Nan, K. Wang, Z. Liu, S. Lian, "RAOD: A Benchmark for Road Abandoned Object Detection From Video Surveillance," *IEEE Access*, vol. 12, pp. 123985–123994, 2024. DOI: [10.1109/ACCESS.2024.3407955](https://doi.org/10.1109/ACCESS.2024.3407955)
+
+使用该数据集或本项目结果时请引用：
+
+```bibtex
+@ARTICLE{10542978,
+  author={Xu, Yajun and Hu, Huan and Zhu, Xiaoya and Nan, Yibing and Wang, Kai and Liu, Zhaoxiang and Lian, Shiguo},
+  journal={IEEE Access},
+  title={RAOD: A Benchmark for Road Abandoned Object Detection From Video Surveillance},
+  year={2024},
+  volume={12},
+  pages={123985-123994},
+  doi={10.1109/ACCESS.2024.3407955}
+}
+```
+
+#### 本地目录与标注格式
+
+目录由 [`raod_path_routes()`](src/datasets/raod_benchmark.py) 定位到 `data/RAOD-benchmark/`：
+
+| 目录 | 用途 |
+| ---- | ---- |
+| `spill_images_train_mosaic/` | 训练图片（`*.jpg`） |
+| `spill_xmls_train_mosaic/` | 训练标注（VOC `*.xml`） |
+| `spill_images_test_mosaic/` | 测试图片（`*.jpg`） |
+| `spill_xmls_test_mosaic/` | 测试标注（VOC `*.xml`） |
+| `select_1000_images/` | 1000 张子集图片（`raod_small` 用） |
+| `select_1000_xmls/` | 子集标注（VOC `*.xml`） |
+
+标注类别固定为 `spill`（抛洒 / 遗弃物），`class_id = 0`。XML 为绝对像素 `xyxy`；仓库另提供 YOLO 归一化 `cxcywh` 的 `*.txt`，本项目使用 XML。`*_mosaic` 表示图片已做过 mosaic 拼接增强，框坐标是拼接后的坐标。首次加载由 `datasets` 库转换为 Arrow 格式并缓存到 `cache/data/raod`，后续直接读取缓存。
+
+#### 本项目的两种数据配置
+
+由 `train_config.dataset` 选择，详见[训练](#训练)：
+
+| 配置 | 数据来源 | 划分方式 |
+| ---- | -------- | -------- |
+| `raod_small`（默认） | `select_1000_images` + `select_1000_xmls` | 固定种子按 80/20 划分，适合快速验证 |
+| `raod` | `spill_images_train_mosaic` / `spill_images_test_mosaic` | 官方 `train` 训练、官方 `test` 验证 |
+
 ### 环境安装
 
 1. 安装 `uv`。macOS 或 Linux 可以使用官方安装脚本，Windows 可以在 PowerShell 中运行 `winget install --id=astral-sh.uv -e`。安装完成后，新开终端运行 `uv --version` 检查。[uv 安装指南](https://docs.astral.sh/uv/getting-started/installation/)
